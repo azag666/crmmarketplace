@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { createClient } from '@supabase/supabase-js';
+// Para o Canvas funcionar, usamos o link do esm.sh. 
+// No seu projeto local (Vercel/Vite), você pode mudar de volta para: import { createClient } from '@supabase/supabase-js';
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.3';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer 
 } from 'recharts';
@@ -9,10 +11,16 @@ import {
 } from 'lucide-react';
 
 // --- Inicialização do Supabase ---
-// Estas variáveis serão lidas do seu arquivo .env ou das configurações da Vercel
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-const supabase = createClient(supabaseUrl, supabaseKey);
+// No seu projeto local com Vite, descomente as linhas com "import.meta.env":
+// const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+// const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+// Para evitar erros aqui no Canvas, deixamos strings vazias (ou você pode colar suas chaves aqui para testar):
+const supabaseUrl = ""; 
+const supabaseKey = ""; 
+
+// Só inicializa o cliente se as chaves existirem, para não quebrar a tela
+const supabase = supabaseUrl && supabaseKey ? createClient(supabaseUrl, supabaseKey) : null;
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -20,33 +28,46 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [errorMsg, setErrorMsg] = useState(null);
 
   // --- Ciclo de Vida & Autenticação ---
   useEffect(() => {
     const checkUser = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session) {
-        setUser(session.user);
-      } else {
-        // Para o MVP, login anônimo para facilitar o teste
-        const { data } = await supabase.auth.signInAnonymously();
-        if (data.user) setUser(data.user);
+      if (!supabase) {
+        setErrorMsg("Supabase não configurado. Adicione suas chaves supabaseUrl e supabaseKey no código para conectar ao banco.");
+        setLoading(false);
+        return;
       }
-      setLoading(false);
+
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session) {
+          setUser(session.user);
+        } else {
+          // Para o MVP, login anônimo para facilitar o teste
+          const { data } = await supabase.auth.signInAnonymously();
+          if (data.user) setUser(data.user);
+        }
+      } catch (err) {
+        console.error("Erro na autenticação:", err);
+      } finally {
+        setLoading(false);
+      }
     };
 
     checkUser();
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
-    });
-
-    return () => subscription.unsubscribe();
+    if (supabase) {
+      const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+        setUser(session?.user ?? null);
+      });
+      return () => subscription.unsubscribe();
+    }
   }, []);
 
   // --- Busca de Dados ---
   useEffect(() => {
-    if (!user) return;
+    if (!user || !supabase) return;
 
     const fetchOrders = async () => {
       const { data, error } = await supabase
@@ -54,7 +75,7 @@ export default function App() {
         .select('*')
         .order('created_at', { ascending: false });
 
-      if (!error) setOrders(data);
+      if (!error && data) setOrders(data);
     };
 
     fetchOrders();
@@ -72,9 +93,9 @@ export default function App() {
 
   // --- Lógica Financeira ---
   const metrics = useMemo(() => {
-    const totalGross = orders.reduce((acc, o) => acc + Number(o.sale_price), 0);
-    const totalCogs = orders.reduce((acc, o) => acc + Number(o.product_cost), 0);
-    const totalFees = orders.reduce((acc, o) => acc + Number(o.shopee_fee) + Number(o.fixed_fee), 0);
+    const totalGross = orders.reduce((acc, o) => acc + Number(o.sale_price || 0), 0);
+    const totalCogs = orders.reduce((acc, o) => acc + Number(o.product_cost || 0), 0);
+    const totalFees = orders.reduce((acc, o) => acc + Number(o.shopee_fee || 0) + Number(o.fixed_fee || 0), 0);
     const totalProfit = totalGross - totalCogs - totalFees;
     const margin = totalGross > 0 ? (totalProfit / totalGross) * 100 : 0;
 
@@ -83,7 +104,10 @@ export default function App() {
 
   const handleAddClosing = async (e) => {
     e.preventDefault();
-    if (!user) return;
+    if (!user || !supabase) {
+      alert("Conecte o Supabase primeiro.");
+      return;
+    }
 
     const fd = new FormData(e.target);
     const salePrice = parseFloat(fd.get('salePrice'));
@@ -101,10 +125,16 @@ export default function App() {
         fixed_fee: parseFloat(fd.get('fixedFee') || 0),
       }]);
 
-    if (!error) setShowModal(false);
+    if (!error) {
+      setShowModal(false);
+    } else {
+      console.error(error);
+      alert("Erro ao salvar no banco.");
+    }
   };
 
   const deleteOrder = async (id) => {
+    if (!supabase) return;
     await supabase.from('closings').delete().eq('id', id);
   };
 
@@ -117,6 +147,11 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#F9FAFB] text-slate-900 font-sans selection:bg-orange-100">
+      {errorMsg && (
+        <div className="bg-red-500 text-white text-center p-3 text-sm font-medium">
+          {errorMsg}
+        </div>
+      )}
       <div className="max-w-7xl mx-auto px-4 py-8 md:px-8">
         
         {/* Header Profissional */}
@@ -134,7 +169,8 @@ export default function App() {
           <div className="flex items-center gap-3">
             <button 
               onClick={() => setShowModal(true)}
-              className="bg-[#EE4D2D] hover:bg-[#D44326] text-white px-8 py-4 rounded-2xl font-bold flex items-center justify-center gap-3 shadow-2xl shadow-orange-200 transition-all hover:-translate-y-1 active:scale-95"
+              className="bg-[#EE4D2D] hover:bg-[#D44326] text-white px-8 py-4 rounded-2xl font-bold flex items-center justify-center gap-3 shadow-2xl shadow-orange-200 transition-all hover:-translate-y-1 active:scale-95 disabled:opacity-50"
+              disabled={!supabase}
             >
               <Plus size={20} strokeWidth={3} />
               NOVO FECHAMENTO
