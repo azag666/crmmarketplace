@@ -1,7 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-// Para o Canvas funcionar, usamos o link do esm.sh. 
-// No seu projeto local (Vercel/Vite), você pode mudar de volta para: import { createClient } from '@supabase/supabase-js';
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.3';
+import { createClient } from '@supabase/supabase-js';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer 
 } from 'recharts';
@@ -10,16 +8,10 @@ import {
   FileText, Trash2, Calculator, ArrowUpRight, LogOut, ChevronRight
 } from 'lucide-react';
 
-// --- Inicialização do Supabase ---
-// No seu projeto local com Vite, descomente as linhas com "import.meta.env":
-// const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-// const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+// --- Inicialização do Supabase (Versão Produção / Vercel) ---
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-// Para evitar erros aqui no Canvas, deixamos strings vazias (ou você pode colar suas chaves aqui para testar):
-const supabaseUrl = ""; 
-const supabaseKey = ""; 
-
-// Só inicializa o cliente se as chaves existirem, para não quebrar a tela
 const supabase = supabaseUrl && supabaseKey ? createClient(supabaseUrl, supabaseKey) : null;
 
 export default function App() {
@@ -27,14 +19,13 @@ export default function App() {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
-  const [isSyncing, setIsSyncing] = useState(false);
   const [errorMsg, setErrorMsg] = useState(null);
 
   // --- Ciclo de Vida & Autenticação ---
   useEffect(() => {
     const checkUser = async () => {
       if (!supabase) {
-        setErrorMsg("Supabase não configurado. Adicione suas chaves supabaseUrl e supabaseKey no código para conectar ao banco.");
+        setErrorMsg("Erro: Variáveis VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY não encontradas na Vercel.");
         setLoading(false);
         return;
       }
@@ -44,12 +35,13 @@ export default function App() {
         if (session) {
           setUser(session.user);
         } else {
-          // Para o MVP, login anônimo para facilitar o teste
-          const { data } = await supabase.auth.signInAnonymously();
+          const { data, error } = await supabase.auth.signInAnonymously();
+          if (error) throw error;
           if (data.user) setUser(data.user);
         }
       } catch (err) {
         console.error("Erro na autenticação:", err);
+        setErrorMsg("Erro ao conectar com o Supabase. Verifique suas chaves.");
       } finally {
         setLoading(false);
       }
@@ -80,7 +72,6 @@ export default function App() {
 
     fetchOrders();
 
-    // Inscrição em tempo real para atualizações automáticas
     const channel = supabase
       .channel('db-changes')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'closings' }, fetchOrders)
@@ -104,10 +95,7 @@ export default function App() {
 
   const handleAddClosing = async (e) => {
     e.preventDefault();
-    if (!user || !supabase) {
-      alert("Conecte o Supabase primeiro.");
-      return;
-    }
+    if (!user || !supabase) return;
 
     const fd = new FormData(e.target);
     const salePrice = parseFloat(fd.get('salePrice'));
@@ -148,13 +136,12 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#F9FAFB] text-slate-900 font-sans selection:bg-orange-100">
       {errorMsg && (
-        <div className="bg-red-500 text-white text-center p-3 text-sm font-medium">
+        <div className="bg-red-500 text-white text-center p-3 text-sm font-medium z-50 relative shadow-md">
           {errorMsg}
         </div>
       )}
       <div className="max-w-7xl mx-auto px-4 py-8 md:px-8">
         
-        {/* Header Profissional */}
         <header className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-12">
           <div className="space-y-1">
             <div className="flex items-center gap-2">
@@ -169,7 +156,7 @@ export default function App() {
           <div className="flex items-center gap-3">
             <button 
               onClick={() => setShowModal(true)}
-              className="bg-[#EE4D2D] hover:bg-[#D44326] text-white px-8 py-4 rounded-2xl font-bold flex items-center justify-center gap-3 shadow-2xl shadow-orange-200 transition-all hover:-translate-y-1 active:scale-95 disabled:opacity-50"
+              className="bg-[#EE4D2D] hover:bg-[#D44326] text-white px-8 py-4 rounded-2xl font-bold flex items-center justify-center gap-3 shadow-2xl shadow-orange-200 transition-all hover:-translate-y-1 active:scale-95 disabled:opacity-50 disabled:hover:translate-y-0"
               disabled={!supabase}
             >
               <Plus size={20} strokeWidth={3} />
@@ -178,7 +165,6 @@ export default function App() {
           </div>
         </header>
 
-        {/* Dash de Indicadores */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-10">
           <KpiCard title="Faturamento" value={metrics.totalGross} color="text-slate-800" icon={<DollarSign size={20}/>} />
           <KpiCard title="Custo Mercadoria" value={metrics.totalCogs} color="text-red-500" icon={<Calculator size={20}/>} />
@@ -194,7 +180,6 @@ export default function App() {
         </div>
 
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
-          {/* Tabela de Lançamentos */}
           <div className="xl:col-span-2 space-y-4">
             <div className="flex items-center justify-between px-2">
               <h3 className="font-black text-slate-800 uppercase tracking-tight flex items-center gap-2">
@@ -231,7 +216,7 @@ export default function App() {
                             R$ {profit.toFixed(2)}
                           </td>
                           <td className="px-8 py-6 text-center">
-                            <button onClick={() => deleteOrder(order.id)} className="text-slate-200 hover:text-red-500 p-2 transition-colors opacity-0 group-hover:opacity-100">
+                            <button onClick={() => deleteOrder(order.id)} className="text-slate-200 hover:text-red-500 p-2 transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100">
                               <Trash2 size={16} />
                             </button>
                           </td>
@@ -254,7 +239,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* Lateral de Analytics */}
           <div className="space-y-6">
             <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
               <h3 className="font-black text-slate-800 mb-8 uppercase tracking-tight text-sm">Volume de Faturamento</h3>
@@ -294,7 +278,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* Modal Moderno */}
       {showModal && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xl flex items-center justify-center z-50 p-4 animate-in fade-in duration-300">
           <div className="bg-white rounded-[3rem] w-full max-w-xl shadow-2xl overflow-hidden scale-in-center">
