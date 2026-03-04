@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import Dashboard from './pages/Dashboard';
 import FinancialDetective from './components/FinancialDetective';
 import ProductAnalytics from './components/ProductAnalytics';
-import { Upload, X, Package, Search, TrendingUp, AlertCircle, CheckCircle, Calendar, Filter, Plus, List, DollarSign } from 'lucide-react';
+import { Upload, X, Package, Search, TrendingUp, AlertCircle, CheckCircle, Calendar, Filter, Plus, List, DollarSign, Bug } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart, Bar } from 'recharts';
 
@@ -361,14 +361,39 @@ export default function App() {
         // 📅 DATA DE CRIAÇÃO (CRÍTICO PARA GRÁFICOS)
         const creationDate = parseDate(row[columns.creation_date]) || parseDate(row[columns.created_at_platform]);
 
-        // SKU do produto
+        // SKU do produto - MELHORADO PARA CASAMENTO EXATO
         let sku = row[columns.sku_variation] || 'SEM SKU';
-        sku = sku.toString().trim().toUpperCase().replace(/\s/g, '');
+        sku = sku.toString().trim().toUpperCase().replace(/\s+/g, ' ').trim();
+        
+        // 🔍 DEPURAÇÃO: Mostrar SKU original e processado
+        console.log(`[SKU] Original: "${row[columns.sku_variation]}" → Processado: "${sku}"`);
+        
+        // Tentar encontrar correspondência exata ou aproximada
+        let matchedSku = sku;
+        if (!PRESET_COSTS[sku] && !productCosts[sku]) {
+          // Tentar remover espaços e caracteres especiais
+          const cleanSku = sku.replace(/[^A-Z0-9]/g, '');
+          console.log(`[SKU] Tentando SKU limpo: "${cleanSku}"`);
+          
+          // Procurar nos custos por correspondência parcial
+          const possibleMatches = Object.keys(PRESET_COSTS).filter(presetSku => 
+            presetSku.includes(cleanSku) || cleanSku.includes(presetSku) ||
+            presetSku.replace(/[^A-Z0-9]/g, '') === cleanSku
+          );
+          
+          if (possibleMatches.length > 0) {
+            matchedSku = possibleMatches[0];
+            console.log(`[SKU] SKU correspondente encontrado: "${matchedSku}" para "${sku}"`);
+          } else {
+            console.log(`[SKU] Nenhuma correspondência encontrada para "${sku}"`);
+          }
+        }
 
         return {
           order_id: row[columns.order_id],
           product_name: row[columns.product_name] || 'Produto não identificado',
-          sku_variation: sku,
+          sku_variation: matchedSku, // Usar SKU correspondente encontrado
+          original_sku: sku, // Manter SKU original para referência
           sale_price: salePrice,
           status: row[columns.status] || 'Concluído',
           
@@ -521,6 +546,11 @@ export default function App() {
       console.log('[CUSTOS] Mapa de custos (existentes + padrões):', productCosts);
       console.log('[CUSTOS] Total de SKUs com custos:', Object.keys(productCosts).length);
       
+      // 🔍 DEPURAÇÃO: Mostrar SKUs da planilha vs custos disponíveis
+      console.log('\n🔍 [DEPURAÇÃO] ANÁLISE DE CASAMENTO DE SKUs:');
+      console.log('SKUs disponíveis nos custos:', Object.keys(productCosts).sort());
+      console.log('SKUs encontrados na planilha:', processedData.map(o => o.sku_variation).filter((v, i, a) => a.indexOf(v) === i).sort());
+      
       // Aplicar lógica empresarial local com custos existentes/padrões
       const processedOrders = processedData.map(order => {
         // 🔥 USAR CUSTO JÁ CADASTRADO ou PADRÃO
@@ -528,7 +558,13 @@ export default function App() {
         const presetCost = PRESET_COSTS[order.sku_variation] || 0;
         const productCost = existingCost > 0 ? existingCost : presetCost;
         
-        console.log(`[CUSTO] SKU ${order.sku_variation}: usando R$ ${productCost} (existente: R$ ${existingCost}, padrão: R$ ${presetCost})`);
+        // 🔍 DEPURAÇÃO DETALHADA POR SKU
+        console.log(`[CUSTO] SKU "${order.sku_variation}" (original: "${order.original_sku || 'N/A'}"):`);
+        console.log(`  - Custo existente: R$ ${existingCost}`);
+        console.log(`  - Custo padrão: R$ ${presetCost}`);
+        console.log(`  - Custo final usado: R$ ${productCost}`);
+        console.log(`  - Preço venda: R$ ${order.sale_price}`);
+        console.log(`  - Status: ${order.status}`);
         
         // Calcular taxas totais
         const totalFees = (order.commission_fee || 0) + (order.service_fee || 0) + 
@@ -537,6 +573,12 @@ export default function App() {
         
         // Calcular lucro bruto
         const grossProfit = order.sale_price - totalFees - productCost;
+        
+        // 🔍 DEPURAÇÃO DO LUCRO
+        console.log(`  - Taxas totais: R$ ${totalFees}`);
+        console.log(`  - Lucro bruto: R$ ${grossProfit}`);
+        console.log(`  - Fórmula: ${order.sale_price} - ${totalFees} - ${productCost} = ${grossProfit}`);
+        console.log('---');
         
         // Aplicar regras empresariais
         let netProfit = grossProfit;
@@ -707,7 +749,54 @@ export default function App() {
     }
   };
 
-  // 📋 FUNÇÃO PARA LISTAR CUSTOS PADRÃO DISPONÍVEIS
+  // � FUNÇÃO PARA DEPURAR CASAMENTO DE SKUs
+  const handleDebugSKUs = () => {
+    const existingProducts = JSON.parse(localStorage.getItem(`shopeeflow_products_${userId}`) || '[]');
+    const productCosts = {};
+    
+    // Criar mapa de custos
+    existingProducts.forEach(product => {
+      productCosts[product.sku] = product.current_cost || 0;
+    });
+    
+    Object.keys(PRESET_COSTS).forEach(sku => {
+      if (!productCosts[sku]) {
+        productCosts[sku] = PRESET_COSTS[sku];
+      }
+    });
+    
+    // Obter pedidos existentes
+    const existingOrders = JSON.parse(localStorage.getItem(`shopeeflow_orders_${userId}`) || '[]');
+    
+    console.log('\n🔍 [DEPURAÇÃO COMPLETA DE SKUs]');
+    console.log('='.repeat(50));
+    console.log('CUSTOS DISPONÍVEIS:');
+    console.log(Object.keys(productCosts).sort());
+    console.log('\nSKUs DOS PEDIDOS:');
+    console.log(existingOrders.map(o => o.sku_variation).filter((v, i, a) => a.indexOf(v) === i).sort());
+    
+    console.log('\nANÁLISE DE CASAMENTO:');
+    existingOrders.slice(0, 10).forEach(order => {
+      const existingCost = productCosts[order.sku_variation] || 0;
+      const presetCost = PRESET_COSTS[order.sku_variation] || 0;
+      const productCost = existingCost > 0 ? existingCost : presetCost;
+      
+      console.log(`\nPedido: ${order.order_id}`);
+      console.log(`  SKU: ${order.sku_variation}`);
+      console.log(`  Produto: ${order.product_name}`);
+      console.log(`  Preço: R$ ${order.sale_price}`);
+      console.log(`  Custo usado: R$ ${productCost}`);
+      console.log(`  Lucro: R$ ${order.net_profit}`);
+      console.log(`  Status: ${order.status}`);
+    });
+    
+    console.log('\n='.repeat(50));
+    console.log('🔍 Abra o console do navegador (F12) para ver detalhes completos!');
+    
+    alert('🔍 Depuração iniciada! Abra o console do navegador (F12) para ver detalhes dos SKUs.');
+  };
+
+  // �� FUNÇÃO PARA LISTAR CUSTOS PADRÃO DISPONÍVEIS
   const handleListPresetCosts = () => {
     let costList = '📋 CUSTOS PADRÃO PRÉ-CADASTRADOS:\n\n';
     costList += Object.entries(PRESET_COSTS).map(([sku, cost], index) => 
@@ -812,6 +901,15 @@ export default function App() {
               >
                 <DollarSign size={16} />
                 Custos Padrão
+              </button>
+              
+              <button 
+                onClick={handleDebugSKUs}
+                className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors"
+                title="Depurar casamento de SKUs"
+              >
+                <Bug size={16} />
+                Depurar SKUs
               </button>
               
               <button 
