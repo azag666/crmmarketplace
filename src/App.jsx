@@ -169,7 +169,10 @@ export default function App() {
   };
 
   const handleImport = () => {
-    if (importedData.length === 0) return;
+    if (processedData.length === 0) {
+      alert('Nenhum dado para importar. Por favor, selecione uma planilha primeiro.');
+      return;
+    }
     
     setIsProcessing(true);
     
