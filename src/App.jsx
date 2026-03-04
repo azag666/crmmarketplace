@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import * as XLSX from 'xlsx';
 import { 
-  BarChart, Bar, CartesianGrid, Tooltip, ResponsiveContainer 
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
+  LineChart, Line, Legend, AreaChart, Area
 } from 'recharts';
 import { 
-  TrendingUp, DollarSign, AlertCircle, 
-  FileText, Trash2, Calculator, ArrowUpRight, 
-  Plus, Upload, X, ChevronRight, Package, Check, Settings, Search
+  TrendingUp, DollarSign, AlertCircle, FileText, Trash2, Calculator, 
+  ArrowUpRight, ArrowDownRight, Plus, Upload, X, Package, Check, 
+  Settings, Search, Truck, MapPin, Calendar, Activity
 } from 'lucide-react';
 
 // --- CUSTOS PADRÃO ---
@@ -42,10 +43,13 @@ export default function App() {
   const [userId, setUserId] = useState(null);
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('dashboard');
+  const [activeTab, setActiveTab] = useState('dashboard'); // dashboard | analysis | costs
+  
+  // Modais
   const [showModal, setShowModal] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
   
+  // Dados de Importação
   const [importedData, setImportedData] = useState([]); 
   const [uniqueProducts, setUniqueProducts] = useState([]);
   const [productDatabase, setProductDatabase] = useState(PRESET_COSTS);
@@ -53,7 +57,7 @@ export default function App() {
   
   const fileInputRef = useRef(null);
 
-  // 1. Gerenciar "Sessão" (Simples UUID local para MVP)
+  // --- 1. Autenticação Simplificada ---
   useEffect(() => {
     let storedId = localStorage.getItem('shopeeflow_user_id');
     if (!storedId) {
@@ -63,7 +67,7 @@ export default function App() {
     setUserId(storedId);
   }, []);
 
-  // 2. Buscar Pedidos via API
+  // --- 2. Busca Dados ---
   const fetchOrders = async () => {
     try {
       const res = await fetch('/api/orders');
@@ -71,18 +75,12 @@ export default function App() {
         const data = await res.json();
         setOrders(data);
       }
-    } catch (error) {
-      console.error("Erro ao buscar API:", error);
-    } finally {
-      setLoading(false);
-    }
+    } catch (error) { console.error(error); } finally { setLoading(false); }
   };
 
-  useEffect(() => {
-    if (userId) fetchOrders();
-  }, [userId]);
+  useEffect(() => { if (userId) fetchOrders(); }, [userId]);
 
-  // 3. Processar Arquivo (Prioridade SKU Variação)
+  // --- 3. Processamento de Planilha Shopee (Completo) ---
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -97,24 +95,35 @@ export default function App() {
       if (!data?.length) return;
       const headers = data[0].map(h => h?.toString().toLowerCase().trim());
       
-      const idxId = headers.findIndex(h => h === 'id do pedido');
-      const idxProd = headers.findIndex(h => h === 'nome do produto');
-      const idxSkuVariation = headers.findIndex(h => h === 'número de referência sku');
-      const idxSkuMain = headers.findIndex(h => h === 'nº de referência do sku principal');
-      const idxPrice = headers.findIndex(h => h === 'preço acordado'); 
-      const idxStatus = headers.findIndex(h => h === 'status do pedido');
-      
-      const idxFeeCom = headers.findIndex(h => h.includes('comissão'));
-      const idxFeeServ = headers.findIndex(h => h.includes('serviço'));
-      const idxFeeTrans = headers.findIndex(h => h.includes('transação'));
+      // Mapeamento de Colunas
+      const cols = {
+        id: headers.findIndex(h => h === 'id do pedido'),
+        prod: headers.findIndex(h => h === 'nome do produto'),
+        skuVar: headers.findIndex(h => h === 'número de referência sku'),
+        skuMain: headers.findIndex(h => h === 'nº de referência do sku principal'),
+        price: headers.findIndex(h => h === 'preço acordado'),
+        status: headers.findIndex(h => h === 'status do pedido'),
+        created: headers.findIndex(h => h === 'data de criação do pedido'),
+        paid: headers.findIndex(h => h === 'hora do pagamento do pedido'),
+        shipped: headers.findIndex(h => h === 'tempo de envio'),
+        provider: headers.findIndex(h => h === 'opção de envio'),
+        city: headers.findIndex(h => h === 'cidade'),
+        state: headers.findIndex(h => h === 'uf' || h === 'estado'),
+        qty: headers.findIndex(h => h === 'quantidade'),
+        returnStatus: headers.findIndex(h => h.includes('status da devolução')),
+        cancelReason: headers.findIndex(h => h.includes('motivo') && h.includes('cancelar')),
+        feeCom: headers.findIndex(h => h.includes('comissão')),
+        feeServ: headers.findIndex(h => h.includes('serviço')),
+        feeTrans: headers.findIndex(h => h.includes('transação')),
+      };
 
-      if (idxId === -1 || idxProd === -1) {
-        alert("Colunas obrigatórias não encontradas.");
+      if (cols.id === -1 || cols.prod === -1) {
+        alert("Planilha inválida. Use a planilha 'Meus Pedidos' da Shopee.");
         return;
       }
 
       const rawItems = data.slice(1).map((row, index) => {
-        if (!row[idxId]) return null;
+        if (!row[cols.id]) return null;
         
         const parseMoney = (val) => {
           if (!val) return 0;
@@ -125,37 +134,50 @@ export default function App() {
           return parseFloat(clean) || 0;
         };
 
-        const salePrice = parseMoney(row[idxPrice]);
+        // Formatação de Datas (Shopee vem como string "YYYY-MM-DD HH:MM")
+        const parseDate = (val) => val ? new Date(val).toISOString() : null;
+
+        const salePrice = parseMoney(row[cols.price]);
         let fees = 0;
-        if (idxFeeCom !== -1) fees += parseMoney(row[idxFeeCom]);
-        if (idxFeeServ !== -1) fees += parseMoney(row[idxFeeServ]);
-        if (idxFeeTrans !== -1) fees += parseMoney(row[idxFeeTrans]);
+        if (cols.feeCom !== -1) fees += parseMoney(row[cols.feeCom]);
+        if (cols.feeServ !== -1) fees += parseMoney(row[cols.feeServ]);
+        if (cols.feeTrans !== -1) fees += parseMoney(row[cols.feeTrans]);
         
         let status = 'Concluído';
-        if (idxStatus !== -1 && row[idxStatus]) status = row[idxStatus].toString().trim();
+        if (cols.status !== -1 && row[cols.status]) status = row[cols.status].toString().trim();
 
         if (status.toLowerCase().includes('cancelado')) fees = 0;
         else if (fees === 0 && salePrice > 0) fees = salePrice * 0.20;
 
+        // SKU Lógica
         let skuKey = '';
-        if (idxSkuVariation !== -1 && row[idxSkuVariation]) skuKey = row[idxSkuVariation].toString().trim();
-        if (!skuKey && idxSkuMain !== -1 && row[idxSkuMain]) skuKey = row[idxSkuMain].toString().trim();
-        if (!skuKey) skuKey = row[idxProd].toString().trim();
+        if (cols.skuVar !== -1 && row[cols.skuVar]) skuKey = row[cols.skuVar].toString().trim();
+        if (!skuKey && cols.skuMain !== -1 && row[cols.skuMain]) skuKey = row[cols.skuMain].toString().trim();
+        if (!skuKey) skuKey = row[cols.prod].toString().trim();
         
+        // Custo
         const cleanSku = skuKey.replace(/\s/g, '').toUpperCase();
         let cost = 0;
         const dbKey = Object.keys(productDatabase).find(k => k.replace(/\s/g, '').toUpperCase() === cleanSku);
         if (dbKey) cost = productDatabase[dbKey];
 
         return {
-          order_id: row[idxId],
-          product_name: row[idxProd],
+          order_id: row[cols.id],
+          product_name: row[cols.prod],
           sku: skuKey,
           sale_price: salePrice,
           product_cost: cost, 
           shopee_fee: Math.abs(fees), 
           fixed_fee: 0,
-          status: status
+          status: status,
+          quantity: row[cols.qty] ? parseInt(row[cols.qty]) : 1,
+          paid_at: parseDate(row[cols.paid]),
+          shipped_at: parseDate(row[cols.shipped]),
+          shipping_provider: row[cols.provider],
+          city: row[cols.city],
+          state: row[cols.state],
+          return_status: row[cols.returnStatus],
+          cancel_reason: row[cols.cancelReason]
         };
       }).filter(Boolean);
 
@@ -179,20 +201,13 @@ export default function App() {
     setProductDatabase(prev => ({...prev, [sku]: newCost}));
   };
 
-  // 4. Salvar via API
   const saveBatch = async () => {
     if (!userId) return;
     try {
       const payload = importedData.map((item) => ({
         user_id: userId,
-        order_id: item.order_id,
-        product_name: item.product_name,
-        sku: item.sku,
-        sale_price: item.sale_price,
-        product_cost: item.product_cost,
-        shopee_fee: item.shopee_fee,
-        fixed_fee: 3.00,
-        status: item.status
+        ...item,
+        fixed_fee: 3.00
       }));
 
       const res = await fetch('/api/orders', {
@@ -200,41 +215,83 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
-
       if (!res.ok) throw new Error(await res.text());
 
       await fetchOrders();
       setShowUploadModal(false);
       setImportedData([]);
-      alert("Sucesso! Dashboard atualizado.");
+      alert("Inteligência atualizada com sucesso!");
     } catch (error) {
       alert("Erro ao salvar: " + error.message);
     }
   };
 
-  // --- Métricas ---
-  const metrics = useMemo(() => {
-    const validOrders = orders.filter(o => 
-      !o.status?.toLowerCase().includes('cancelado') && 
-      !o.status?.toLowerCase().includes('reembolso')
-    );
+  const handleUpdateDatabase = (sku, val) => {
+    setProductDatabase(prev => ({ ...prev, [sku]: parseFloat(val) || 0 }));
+  };
 
+  // --- ANÁLISE E MÉTRICAS AVANÇADAS ---
+  const analytics = useMemo(() => {
+    const validOrders = orders.filter(o => !o.status?.toLowerCase().includes('cancelado'));
+    
+    // 1. Financeiro Geral
     const totalGross = validOrders.reduce((acc, o) => acc + (Number(o.sale_price) || 0), 0);
     const totalCogs = validOrders.reduce((acc, o) => acc + (Number(o.product_cost) || 0), 0);
     const totalFees = validOrders.reduce((acc, o) => acc + (Number(o.shopee_fee) || 0) + (Number(o.fixed_fee) || 0), 0);
     const totalProfit = totalGross - totalCogs - totalFees;
     const margin = totalGross > 0 ? (totalProfit / totalGross) * 100 : 0;
 
-    const statusCount = orders.reduce((acc, o) => {
-      const st = o.status || 'Concluído';
-      acc[st] = (acc[st] || 0) + 1;
-      return acc;
-    }, {});
+    // 2. Gráfico Diário (Vendas x Pagas x Enviadas)
+    const dailyMap = {};
+    orders.forEach(o => {
+      const day = new Date(o.created_at || Date.now()).toLocaleDateString('pt-BR');
+      if (!dailyMap[day]) dailyMap[day] = { name: day, vendas: 0, pagos: 0, enviados: 0, lucro: 0 };
+      
+      dailyMap[day].vendas += 1;
+      if (o.paid_at) dailyMap[day].pagos += 1;
+      if (o.shipped_at) dailyMap[day].enviados += 1;
+      
+      if (!o.status.includes('Cancelado')) {
+         const p = o.sale_price - o.product_cost - o.shopee_fee - o.fixed_fee;
+         dailyMap[day].lucro += p;
+      }
+    });
+    // Ordena por data e pega os últimos 14 dias
+    const dailyChartData = Object.values(dailyMap)
+      .sort((a,b) => new Date(a.name.split('/').reverse().join('-')) - new Date(b.name.split('/').reverse().join('-')))
+      .slice(-14);
 
-    return { totalGross, totalCogs, totalFees, totalProfit, margin, statusCount };
+    // 3. Gargalos (Lucro por Produto)
+    const skuAnalysis = {};
+    validOrders.forEach(o => {
+      if (!skuAnalysis[o.sku]) skuAnalysis[o.sku] = { sku: o.sku, qtd: 0, lucro: 0, faturamento: 0 };
+      const profit = o.sale_price - o.product_cost - o.shopee_fee - o.fixed_fee;
+      skuAnalysis[o.sku].qtd += 1;
+      skuAnalysis[o.sku].lucro += profit;
+      skuAnalysis[o.sku].faturamento += o.sale_price;
+    });
+    
+    const sortedSkus = Object.values(skuAnalysis).sort((a, b) => b.lucro - a.lucro);
+    const topWinners = sortedSkus.slice(0, 5);
+    const topLosers = sortedSkus.filter(i => i.lucro < 0).sort((a, b) => a.lucro - b.lucro).slice(0, 5);
+
+    // 4. Mapa de Estados
+    const stateMap = {};
+    validOrders.forEach(o => {
+      if(o.state) {
+        const uf = o.state.toUpperCase().trim();
+        stateMap[uf] = (stateMap[uf] || 0) + 1;
+      }
+    });
+    const stateData = Object.entries(stateMap)
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 8);
+
+    return { totalGross, totalCogs, totalFees, totalProfit, margin, dailyChartData, topWinners, topLosers, stateData };
   }, [orders]);
 
-  if (loading) return <div className="h-screen flex items-center justify-center">Carregando...</div>;
+  if (loading) return <div className="h-screen flex items-center justify-center">Carregando CRM...</div>;
 
   return (
     <div className="min-h-screen bg-[#F9FAFB] text-slate-900 font-sans p-4 md:p-8">
@@ -244,121 +301,179 @@ export default function App() {
         <header className="flex flex-col md:flex-row justify-between items-center gap-6">
           <div>
             <h1 className="text-3xl font-black italic text-slate-800 flex items-center gap-2">
-              <TrendingUp className="text-orange-500" /> ShopeeFlow
+              <TrendingUp className="text-orange-500" /> ShopeeFlow <span className="text-xs bg-orange-100 text-orange-600 px-2 py-1 rounded-lg not-italic">PRO</span>
             </h1>
-            <p className="text-slate-400 text-xs font-bold uppercase tracking-widest">Painel de Lucro Real</p>
+            <p className="text-slate-400 text-xs font-bold uppercase tracking-widest">Inteligência Comercial</p>
           </div>
-          <div className="flex bg-white p-1 rounded-2xl shadow-sm border border-slate-100">
-            <button onClick={() => setActiveTab('dashboard')} className={`px-6 py-3 rounded-xl font-bold text-sm flex items-center gap-2 ${activeTab === 'dashboard' ? 'bg-slate-900 text-white' : 'text-slate-400'}`}>
-              <TrendingUp size={16} /> DASHBOARD
-            </button>
-            <button onClick={() => setActiveTab('costs')} className={`px-6 py-3 rounded-xl font-bold text-sm flex items-center gap-2 ${activeTab === 'costs' ? 'bg-orange-500 text-white' : 'text-slate-400'}`}>
-              <Package size={16} /> CUSTOS
-            </button>
+          
+          <div className="flex bg-white p-1 rounded-2xl shadow-sm border border-slate-100 overflow-x-auto">
+            <NavButton active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} icon={<TrendingUp size={16}/>} label="VISÃO GERAL" />
+            <NavButton active={activeTab === 'analysis'} onClick={() => setActiveTab('analysis')} icon={<Activity size={16}/>} label="GARGALOS & LUCROS" />
+            <NavButton active={activeTab === 'costs'} onClick={() => setActiveTab('costs')} icon={<Settings size={16}/>} label="CUSTOS" />
           </div>
+
           <div className="flex gap-2">
-            <button onClick={() => setShowUploadModal(true)} className="bg-emerald-600 text-white p-3 rounded-xl shadow-lg hover:bg-emerald-700"><Upload size={20} /></button>
-            <button onClick={() => setShowModal(true)} className="bg-[#EE4D2D] text-white p-3 rounded-xl shadow-lg hover:bg-[#d44326]"><Plus size={20} /></button>
+            <button onClick={() => setShowUploadModal(true)} className="bg-emerald-600 text-white p-3 rounded-xl shadow-lg hover:bg-emerald-700 transition-all"><Upload size={20} /></button>
           </div>
         </header>
 
-        {/* DASHBOARD */}
+        {/* --- ABA: DASHBOARD --- */}
         {activeTab === 'dashboard' && (
-          <div className="space-y-8">
+          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            {/* KPIs */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              <KpiCard title="Faturamento Líquido" value={metrics.totalGross} color="text-slate-800" icon={<DollarSign size={20}/>} />
-              <KpiCard title="Custo Mercadoria" value={metrics.totalCogs} color="text-red-500" icon={<Calculator size={20}/>} />
-              <KpiCard title="Taxas Totais" value={metrics.totalFees} color="text-orange-500" icon={<AlertCircle size={20}/>} />
-              <KpiCard title="Lucro Líquido" value={metrics.totalProfit} color="text-emerald-600" icon={<TrendingUp size={20}/>} highlight sub={`Margem: ${metrics.margin.toFixed(1)}%`} />
+              <KpiCard title="Faturamento Líquido" value={analytics.totalGross} color="text-slate-800" icon={<DollarSign size={20}/>} />
+              <KpiCard title="Custo Mercadoria" value={analytics.totalCogs} color="text-red-500" icon={<Calculator size={20}/>} />
+              <KpiCard title="Taxas Totais" value={analytics.totalFees} color="text-orange-500" icon={<AlertCircle size={20}/>} />
+              <KpiCard title="Lucro Líquido" value={analytics.totalProfit} color="text-emerald-600" icon={<TrendingUp size={20}/>} highlight sub={`Margem: ${analytics.margin.toFixed(1)}%`} />
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-              <div className="bg-white rounded-[2rem] border border-slate-100 shadow-sm p-6">
-                 <h3 className="font-black text-slate-800 uppercase text-sm mb-4">Status</h3>
-                 <div className="space-y-3">
-                   {Object.entries(metrics.statusCount).map(([status, count]) => (
-                     <div key={status} className="flex justify-between items-center p-3 bg-slate-50 rounded-xl">
-                        <span className="font-bold text-sm text-slate-600 flex items-center gap-2">
-                           <div className={`w-3 h-3 rounded-full`} style={{backgroundColor: STATUS_COLORS[status] || '#94A3B8'}}></div>
-                           {status}
-                        </span>
-                        <span className="font-black text-slate-800">{count}</span>
-                     </div>
-                   ))}
-                 </div>
+            {/* GRÁFICO DIÁRIO */}
+            <div className="bg-white p-8 rounded-[2rem] border border-slate-100 shadow-sm">
+              <div className="flex justify-between items-center mb-6">
+                <div>
+                   <h3 className="font-black text-slate-800 uppercase text-sm">Fluxo Diário de Pedidos</h3>
+                   <p className="text-xs text-slate-400">Criados vs. Pagos vs. Enviados (Últimos 14 dias)</p>
+                </div>
               </div>
-
-              <div className="lg:col-span-2 bg-slate-900 p-8 rounded-[2.5rem] text-white shadow-xl">
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="bg-orange-500 p-2 rounded-xl"><ArrowUpRight size={20} className="text-white" /></div>
-                  <h4 className="font-black text-sm uppercase tracking-widest">Performance (Válidos)</h4>
-                </div>
-                <div className="h-[200px] w-full">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={orders.filter(o => !o.status?.includes('Cancelado')).slice(0,15).reverse()}>
-                      <Bar dataKey="sale_price" fill="#EE4D2D" radius={[4,4,4,4]} />
-                      <Tooltip cursor={{fill: 'transparent'}} contentStyle={{background: '#1e293b', border: 'none', color: '#fff'}}/>
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
+              <div className="h-[300px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={analytics.dailyChartData}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9"/>
+                    <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fontSize: 10, fill: '#94a3b8'}} dy={10}/>
+                    <Tooltip contentStyle={{borderRadius: '12px', border: 'none', boxShadow: '0 4px 20px rgba(0,0,0,0.05)'}}/>
+                    <Legend />
+                    <Line type="monotone" dataKey="vendas" stroke="#94a3b8" strokeWidth={2} dot={false} name="Criados" />
+                    <Line type="monotone" dataKey="pagos" stroke="#10B981" strokeWidth={3} activeDot={{r: 8}} name="Pagos" />
+                    <Line type="monotone" dataKey="enviados" stroke="#3B82F6" strokeWidth={2} dot={false} name="Enviados" />
+                  </LineChart>
+                </ResponsiveContainer>
               </div>
             </div>
 
-            {/* TABELA DE PEDIDOS */}
-            <div className="bg-white rounded-[2rem] border border-slate-100 shadow-sm overflow-hidden p-6">
-              <h3 className="font-black text-slate-800 uppercase flex items-center gap-2 text-sm mb-6">
-                <FileText size={18} className="text-slate-400" /> Detalhe dos Pedidos
-              </h3>
-              <div className="overflow-x-auto max-h-[500px]">
-                <table className="w-full text-left text-sm">
-                  <thead className="sticky top-0 bg-white z-10">
-                    <tr className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-50">
-                      <th className="pb-4 pl-4">Pedido</th>
-                      <th className="pb-4 text-center">Status</th>
-                      <th className="pb-4 text-right">Venda</th>
-                      <th className="pb-4 text-right text-red-400">Custo</th>
-                      <th className="pb-4 text-right">Lucro</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-50">
-                    {orders.map(o => {
-                      const profit = o.sale_price - o.product_cost - o.shopee_fee - o.fixed_fee;
-                      const isCancelled = o.status?.toLowerCase().includes('cancelado');
-                      return (
-                        <tr key={o.order_id} className={isCancelled ? 'opacity-50 grayscale' : ''}>
-                          <td className="py-4 pl-4">
-                            <div className="font-bold text-slate-700">{o.order_id}</div>
-                            <div className="text-[10px] text-slate-400 truncate max-w-[200px] font-bold uppercase">{o.product_name}</div>
-                          </td>
-                          <td className="py-4 text-center">
-                              <span className="px-2 py-1 rounded text-[10px] font-bold uppercase text-white" 
-                                    style={{backgroundColor: STATUS_COLORS[o.status] || '#94A3B8'}}>
-                                {o.status}
-                              </span>
-                          </td>
-                          <td className="py-4 text-right font-bold text-slate-600">R$ {Number(o.sale_price).toFixed(2)}</td>
-                          <td className="py-4 text-right text-red-400 font-medium">R$ {Number(o.product_cost).toFixed(2)}</td>
-                          <td className={`py-4 text-right font-black ${profit > 0 ? 'text-emerald-500' : 'text-red-500'}`}>
-                            R$ {profit.toFixed(2)}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+            {/* MAPA E LISTA */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+               <div className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm">
+                  <h3 className="font-black text-slate-800 uppercase text-sm mb-4 flex items-center gap-2"><MapPin size={18} className="text-orange-500"/> Top Estados</h3>
+                  <div className="space-y-3">
+                    {analytics.stateData.map((st, i) => (
+                      <div key={st.name} className="flex items-center gap-3">
+                        <span className="w-6 font-bold text-slate-400 text-xs">#{i+1}</span>
+                        <div className="flex-1">
+                          <div className="flex justify-between text-xs font-bold mb-1">
+                            <span>{st.name}</span>
+                            <span>{st.value} vendas</span>
+                          </div>
+                          <div className="h-2 w-full bg-slate-50 rounded-full overflow-hidden">
+                             <div className="h-full bg-orange-400 rounded-full" style={{width: `${(st.value / analytics.stateData[0].value) * 100}%`}}></div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+               </div>
+
+               <div className="bg-slate-900 p-8 rounded-[2rem] text-white shadow-xl flex flex-col justify-center">
+                  <h3 className="font-black text-lg mb-2">Resumo da Operação</h3>
+                  <p className="text-slate-400 text-sm mb-6">
+                    Sua operação tem uma margem média de <span className="text-white font-bold">{analytics.margin.toFixed(1)}%</span>.
+                    <br/>
+                    Identificamos {analytics.topLosers.length} produtos dando prejuízo direto.
+                  </p>
+                  <button onClick={() => setActiveTab('analysis')} className="bg-orange-500 text-white font-bold py-3 px-6 rounded-xl w-fit hover:bg-orange-600 transition-all flex items-center gap-2">
+                    VER GARGALOS <ArrowUpRight size={18}/>
+                  </button>
+               </div>
             </div>
           </div>
         )}
 
-        {/* ABA CUSTOS */}
+        {/* --- ABA: ANÁLISE (GARGALOS) --- */}
+        {activeTab === 'analysis' && (
+          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+             
+             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                {/* PREJUÍZO */}
+                <div className="bg-white p-8 rounded-[2rem] border border-red-100 shadow-sm relative overflow-hidden">
+                   <div className="absolute top-0 right-0 p-4 opacity-10"><ArrowDownRight size={100} className="text-red-500"/></div>
+                   <h3 className="font-black text-red-600 uppercase text-xl mb-6 flex items-center gap-2">
+                     <AlertCircle/> Gargalos de Prejuízo
+                   </h3>
+                   <div className="space-y-4">
+                     {analytics.topLosers.length === 0 ? <p className="text-slate-400">Nenhum produto com prejuízo encontrado!</p> :
+                     analytics.topLosers.map(item => (
+                       <div key={item.sku} className="p-4 bg-red-50 rounded-xl border border-red-100">
+                          <div className="flex justify-between items-start mb-2">
+                            <span className="font-bold text-slate-700 text-sm truncate max-w-[200px]">{item.sku}</span>
+                            <span className="bg-red-200 text-red-800 text-[10px] font-black px-2 py-1 rounded">
+                              {item.qtd} vendas
+                            </span>
+                          </div>
+                          <div className="flex justify-between text-xs">
+                             <span className="text-slate-500">Prejuízo Total:</span>
+                             <span className="font-black text-red-600">R$ {item.lucro.toFixed(2)}</span>
+                          </div>
+                       </div>
+                     ))}
+                   </div>
+                </div>
+
+                {/* LUCRO */}
+                <div className="bg-white p-8 rounded-[2rem] border border-emerald-100 shadow-sm relative overflow-hidden">
+                   <div className="absolute top-0 right-0 p-4 opacity-10"><ArrowUpRight size={100} className="text-emerald-500"/></div>
+                   <h3 className="font-black text-emerald-600 uppercase text-xl mb-6 flex items-center gap-2">
+                     <TrendingUp/> Top Lucrativos
+                   </h3>
+                   <div className="space-y-4">
+                     {analytics.topWinners.map(item => (
+                       <div key={item.sku} className="p-4 bg-emerald-50 rounded-xl border border-emerald-100">
+                          <div className="flex justify-between items-start mb-2">
+                            <span className="font-bold text-slate-700 text-sm truncate max-w-[200px]">{item.sku}</span>
+                            <span className="bg-emerald-200 text-emerald-800 text-[10px] font-black px-2 py-1 rounded">
+                              {item.qtd} vendas
+                            </span>
+                          </div>
+                          <div className="flex justify-between text-xs">
+                             <span className="text-slate-500">Lucro Total:</span>
+                             <span className="font-black text-emerald-600">R$ {item.lucro.toFixed(2)}</span>
+                          </div>
+                       </div>
+                     ))}
+                   </div>
+                </div>
+             </div>
+
+             {/* GRÁFICO DE LUCRO ACUMULADO */}
+             <div className="bg-white p-8 rounded-[2rem] border border-slate-100 shadow-sm">
+                <h3 className="font-black text-slate-800 uppercase text-sm mb-4">Evolução do Lucro (14 Dias)</h3>
+                <div className="h-[300px]">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart data={analytics.dailyChartData}>
+                      <defs>
+                        <linearGradient id="colorLucro" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#10B981" stopOpacity={0.8}/>
+                          <stop offset="95%" stopColor="#10B981" stopOpacity={0}/>
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9"/>
+                      <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fontSize: 10}}/>
+                      <Tooltip/>
+                      <Area type="monotone" dataKey="lucro" stroke="#10B981" fillOpacity={1} fill="url(#colorLucro)" />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+             </div>
+          </div>
+        )}
+
+        {/* --- ABA: CUSTOS (Simples) --- */}
         {activeTab === 'costs' && (
-          <div className="bg-white rounded-[2rem] border border-slate-100 shadow-sm p-8">
+          <div className="bg-white rounded-[2rem] border border-slate-100 shadow-sm p-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
             <div className="flex justify-between items-center mb-6">
                <h2 className="text-2xl font-black text-slate-800 uppercase">Custos por SKU</h2>
                <div className="bg-slate-50 p-2 rounded-xl flex items-center border border-slate-100">
                   <Search size={18} className="text-slate-400 ml-2" />
-                  <input placeholder="Buscar SKU..." className="bg-transparent outline-none font-bold text-slate-700 text-sm ml-2"
+                  <input placeholder="Buscar..." className="bg-transparent outline-none font-bold text-slate-700 text-sm ml-2"
                     onChange={(e) => setSearchTerm(e.target.value.toLowerCase())} />
                </div>
             </div>
@@ -366,25 +481,27 @@ export default function App() {
               {Object.entries(productDatabase)
                 .filter(([sku]) => sku.toLowerCase().includes(searchTerm))
                 .map(([sku, cost]) => (
-                <div key={sku} className="p-4 rounded-2xl border border-slate-100 hover:border-orange-200 transition-all bg-white">
-                  <p className="font-bold text-slate-700 text-sm truncate" title={sku}>{sku}</p>
-                  <div className="flex items-center justify-between mt-2">
-                    <span className="text-xs font-bold text-slate-400">Custo:</span>
-                    <span className="text-emerald-600 font-black">R$ {cost.toFixed(2)}</span>
+                <div key={sku} className="p-4 rounded-2xl border border-slate-100 hover:border-orange-200 bg-white flex justify-between items-center">
+                  <span className="font-bold text-slate-700 text-sm truncate max-w-[150px]" title={sku}>{sku}</span>
+                  <div className="flex items-center gap-1 bg-slate-50 px-3 py-1 rounded-lg">
+                    <span className="text-xs font-bold text-slate-400">R$</span>
+                    <input type="number" defaultValue={cost} onBlur={(e) => handleUpdateDatabase(sku, e.target.value)}
+                      className="w-16 bg-transparent text-right font-black text-emerald-600 outline-none" />
                   </div>
                 </div>
               ))}
             </div>
           </div>
         )}
+
       </div>
 
-      {/* MODAL UPLOAD */}
+      {/* MODAL UPLOAD (Mantido Completo) */}
       {showUploadModal && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-[2rem] w-full max-w-6xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden">
             <div className="bg-emerald-600 p-6 text-white flex justify-between items-center">
-              <h3 className="text-xl font-black italic flex items-center gap-2"><Upload/> IMPORTAR</h3>
+              <h3 className="text-xl font-black italic flex items-center gap-2"><Upload/> IMPORTAR SHOPEE</h3>
               <button onClick={() => {setShowUploadModal(false); setImportedData([]);}}><X/></button>
             </div>
             <div className="p-6 overflow-y-auto flex-1 bg-slate-50">
@@ -393,29 +510,24 @@ export default function App() {
                   onClick={() => fileInputRef.current.click()}>
                   <input type="file" hidden ref={fileInputRef} accept=".xlsx, .xls, .csv" onChange={handleFileUpload} />
                   <FileText size={48} className="text-slate-300 mb-4"/>
-                  <h4 className="text-lg font-black text-slate-700">Clique para selecionar Planilha Shopee</h4>
+                  <h4 className="text-lg font-black text-slate-700">Clique para selecionar Planilha</h4>
                 </div>
               ) : (
                 <div className="space-y-6">
-                   {/* RESUMO */}
-                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                      <div className="bg-white p-4 rounded-xl border border-slate-100 text-center">
-                          <div className="text-xs font-bold text-slate-400 uppercase">Total</div>
+                   <div className="grid grid-cols-3 gap-4 text-center">
+                      <div className="bg-white p-4 rounded-xl border border-slate-100">
+                          <div className="text-xs font-bold text-slate-400 uppercase">Total Pedidos</div>
                           <div className="text-2xl font-black text-slate-800">{importedData.length}</div>
                       </div>
-                      <div className="bg-white p-4 rounded-xl border border-slate-100 text-center">
-                          <div className="text-xs font-bold text-slate-400 uppercase">Faturamento</div>
-                          <div className="text-2xl font-black text-emerald-600">
-                            R$ {importedData.reduce((acc, i) => acc + (i.status.includes('Cancel') ? 0 : i.sale_price), 0).toFixed(0)}
-                          </div>
-                      </div>
-                      <div className="bg-white p-4 rounded-xl border border-slate-100 text-center">
+                      <div className="bg-white p-4 rounded-xl border border-slate-100">
                           <div className="text-xs font-bold text-slate-400 uppercase">Produtos Únicos</div>
                           <div className="text-2xl font-black text-orange-500">{uniqueProducts.length}</div>
                       </div>
+                      <div className="bg-white p-4 rounded-xl border border-slate-100">
+                          <div className="text-xs font-bold text-slate-400 uppercase">Ação</div>
+                          <button onClick={saveBatch} className="bg-emerald-600 text-white px-4 py-2 rounded-lg font-bold text-sm w-full hover:bg-emerald-700">SALVAR</button>
+                      </div>
                    </div>
-
-                   {/* TABELA REVISÃO */}
                    <div className="bg-white rounded-2xl shadow-sm overflow-hidden">
                       <table className="w-full text-left text-xs">
                         <thead className="bg-slate-50 uppercase font-black text-slate-400">
@@ -427,8 +539,7 @@ export default function App() {
                               <td className="p-4 font-bold text-slate-700">{prod.sku}</td>
                               <td className="p-4 text-center font-mono">{prod.count}</td>
                               <td className="p-4 text-right">
-                                <input type="number" value={prod.cost}
-                                  onChange={(e) => handleImportCostChange(prod.sku, parseFloat(e.target.value) || 0)} 
+                                <input type="number" value={prod.cost} onChange={(e) => handleImportCostChange(prod.sku, parseFloat(e.target.value) || 0)} 
                                   className={`w-24 border p-2 rounded-lg text-right font-bold outline-none ${prod.cost === 0 ? 'border-red-300 text-red-500' : 'border-slate-200 text-emerald-600'}`} />
                               </td>
                               <td className="p-4 text-center">{prod.cost > 0 ? <Check size={16} className="text-emerald-500 inline"/> : 'PENDENTE'}</td>
@@ -440,18 +551,19 @@ export default function App() {
                 </div>
               )}
             </div>
-            {importedData.length > 0 && (
-              <div className="p-6 border-t border-slate-100 bg-white flex justify-end gap-3">
-                <button onClick={() => setImportedData([])} className="px-6 py-4 font-bold text-slate-400">Cancelar</button>
-                <button onClick={saveBatch} className="bg-emerald-600 text-white px-8 py-4 rounded-xl font-black shadow-xl">CONFIRMAR E SALVAR</button>
-              </div>
-            )}
           </div>
         </div>
       )}
     </div>
   );
 }
+
+// Componentes Auxiliares
+const NavButton = ({ active, onClick, icon, label }) => (
+  <button onClick={onClick} className={`px-6 py-3 rounded-xl font-bold text-xs flex items-center gap-2 whitespace-nowrap transition-all ${active ? 'bg-slate-900 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-50'}`}>
+    {icon} {label}
+  </button>
+);
 
 const KpiCard = ({ title, value, icon, color, sub, highlight }) => (
   <div className={`p-6 rounded-[2rem] border ${highlight ? 'bg-white border-emerald-100 ring-4 ring-emerald-50/50' : 'bg-white border-slate-100'} shadow-sm`}>
