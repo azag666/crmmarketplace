@@ -7,7 +7,7 @@ import {
 import { 
   TrendingUp, DollarSign, AlertCircle, 
   FileText, Trash2, Calculator, ArrowUpRight, 
-  Plus, Upload, Save, X, ChevronRight, Package, Check
+  Plus, Upload, Save, X, ChevronRight, Package, Check, Settings, Search
 } from 'lucide-react';
 
 // --- Inicialização do Supabase ---
@@ -15,43 +15,63 @@ const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 const supabase = supabaseUrl && supabaseKey ? createClient(supabaseUrl, supabaseKey) : null;
 
+// --- CUSTOS PADRÃO (Sua lista pré-carregada) ---
+const PRESET_COSTS = {
+  "ESTANTE4PRATBANCO": 36.03, "ESTANTE5PRAT": 40.92, "DECK40X40CM3UN": 27.18, 
+  "ESTANTESANITA4PRAT": 16.18, "ESTANTE3PRAT65X302UN": 39.00, "3UNIPALLET50X50CM": 37.20,
+  "ESTANTE3CRUA": 18.85, "DECK30X30": 5.59, "DECK40X40CM4UN": 36.24, "ESTANTE65CM2UN": 49.42,
+  "ESTANTE2PRAT": 16.27, "GABINETEBANHEIRO": 22.96, "ESTANTE3PRAT2UN": 37.70,
+  "ESTRADO25X25CM": 3.55, "CAPABOTIJÃO": 59.79, "PALLET": 12.40, "ESTANTE4PRAT": 34.88,
+  "SAPATEIROBANCO": 40.93, "2UNIESTANTE65X50CM": 49.42, "PALLET40X40CM": 10.10,
+  "2UNIESTANTE3CRUA": 37.70, "10UNIDECK30X30CM": 55.90, "DECK30X30CM": 5.59,
+  "02UNIESTANTE65X50": 49.42, "SUPPLANTA": 2.74, "ESTANTE5PRAT100X50X30": 40.92,
+  "SUPPLANTA5UNI": 13.10, "DECK30X30CM3UN": 16.77, "PALLET50X50CM": 12.40,
+  "DECK30X30CM2UN": 11.18, "PRATELEIRAVASOS70X50CM": 38.94, "ESTANTE3CRUAFECHADA": 25.62,
+  "ESTANTE65X30X30": 19.50, "CAVALETE70CM2UNI": 21.84, "02UNIPALLET50X50": 24.80,
+  "25UNIRIPA40CM": 19.75, "ARARAINFANTIL": 21.93, "ESTANTE3PRAT": 18.85,
+  "SUPPLANTA4UNI": 10.96, "4UNIDECK30X30CM": 22.36, "ESTRADO25X25CM4UNI": 14.20,
+  "02UNICAVALETE70CM": 21.84, "CAVALETE70CM": 10.92, "SUPPLANTA2UNI": 5.48,
+  "ARARAINFATIL": 21.93, "SUPPLANTA2UN": 5.48, "ESTANTE65CM": 24.71,
+  "BARALHOCOPAGKITGABINETE+ESTANTESANITARI1PRAT": 39.14, "SUPPLANTA3UNI": 8.22,
+  "DECK40X40CM2UN": 18.12, "100litros006": 20.00, "ESTANTE65X50CM": 24.71,
+  "ESTANTE3PRAT65X30": 19.50, "TABUA20X60CM": 0.00, "ESTANTE65X50X30": 24.71,
+  "02UNICAVALETE80CM": 21.84, "DECK40X40CM": 9.06, "SUPARANDELA": 1.76,
+  "DECK30X30CM4UN": 22.36, "ESTANTESANITA1PRAT": 16.78, "03UNICAVALETE70CM": 32.76
+};
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
+  
+  // Navegação
+  const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard' | 'costs'
+
+  // Modais
   const [showModal, setShowModal] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
-  const [errorMsg, setErrorMsg] = useState(null);
   
-  // Estados para importação
-  const [importedData, setImportedData] = useState([]); // Dados brutos expandidos
-  const [uniqueProducts, setUniqueProducts] = useState([]); // Resumo por SKU para edição
+  // Dados
+  const [importedData, setImportedData] = useState([]); 
+  const [uniqueProducts, setUniqueProducts] = useState([]);
+  const [productDatabase, setProductDatabase] = useState(PRESET_COSTS);
+  const [searchTerm, setSearchTerm] = useState('');
+  
   const fileInputRef = useRef(null);
 
-  // --- 1. Autenticação ---
+  // --- 1. Autenticação e Load ---
   useEffect(() => {
-    const checkUser = async () => {
-      if (!supabase) {
-        setErrorMsg("Erro: Chaves do Supabase não configuradas na Vercel.");
-        setLoading(false);
-        return;
+    const init = async () => {
+      if (!supabase) return setLoading(false);
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) setUser(session.user);
+      else {
+        const { data } = await supabase.auth.signInAnonymously();
+        if (data?.user) setUser(data.user);
       }
-      try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (session) setUser(session.user);
-        else {
-          const { data, error } = await supabase.auth.signInAnonymously();
-          if (error) throw error;
-          if (data?.user) setUser(data.user);
-        }
-      } catch (err) {
-        console.error(err);
-        setErrorMsg("Erro de conexão com banco de dados.");
-      } finally {
-        setLoading(false);
-      }
+      setLoading(false);
     };
-    checkUser();
+    init();
 
     if(supabase) {
       const { data: { subscription } } = supabase.auth.onAuthStateChange((_, session) => {
@@ -61,24 +81,21 @@ export default function App() {
     }
   }, []);
 
-  // --- 2. Dados em Tempo Real ---
+  // --- 2. Busca Pedidos (Realtime) ---
   useEffect(() => {
     if (!user || !supabase) return;
-
     const fetchOrders = async () => {
       const { data } = await supabase.from('closings').select('*').order('created_at', { ascending: false });
       if (data) setOrders(data);
     };
     fetchOrders();
-
     const channel = supabase.channel('realtime').on('postgres_changes', 
       { event: '*', schema: 'public', table: 'closings' }, fetchOrders
     ).subscribe();
-
     return () => supabase.removeChannel(channel);
   }, [user]);
 
-  // --- 3. Lógica de Importação de Excel ---
+  // --- 3. Lógica de Importação (Lê Arquivo + Aplica Custos Salvos) ---
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -87,30 +104,22 @@ export default function App() {
     reader.onload = (evt) => {
       const bstr = evt.target.result;
       const wb = XLSX.read(bstr, { type: 'binary' });
-      const wsname = wb.SheetNames[0];
-      const ws = wb.Sheets[wsname];
+      const ws = wb.Sheets[wb.SheetNames[0]];
       const data = XLSX.utils.sheet_to_json(ws, { header: 1 });
 
-      if (!data || data.length === 0) return;
-
+      if (!data?.length) return;
       const headers = data[0].map(h => h?.toString().toLowerCase().trim());
       
-      // Mapeamento Shopee Padrão + Planilha Julho (W/X)
       const idxId = headers.findIndex(h => h === 'id do pedido');
       const idxProd = headers.findIndex(h => h === 'nome do produto');
-      const idxSku = headers.findIndex(h => h === 'número de referência sku' || h === 'número de referência sku principal');
+      const idxSku = headers.findIndex(h => h.includes('sku')); // Tenta achar SKU
       const idxPrice = headers.findIndex(h => h === 'preço acordado'); 
-      
-      // Colunas de Custo (Se existirem, como na planilha de Julho)
-      const idxCostUnit = headers.findIndex(h => h.includes('custo unitario') || h.includes('custo unitário'));
-      
-      // Taxas
-      const idxFeeComissao = headers.findIndex(h => h === 'taxa de comissão bruta' || h === 'taxa de comissão');
-      const idxFeeServico = headers.findIndex(h => h === 'taxa de serviço bruta' || h === 'taxa de serviço');
-      const idxFeeTransacao = headers.findIndex(h => h === 'taxa de transação');
+      const idxFeeCom = headers.findIndex(h => h.includes('comissão'));
+      const idxFeeServ = headers.findIndex(h => h.includes('serviço'));
+      const idxFeeTrans = headers.findIndex(h => h.includes('transação'));
 
       if (idxId === -1 || idxProd === -1) {
-        alert("Erro: Colunas 'ID do pedido' ou 'Nome do Produto' não encontradas.");
+        alert("Colunas obrigatórias não encontradas.");
         return;
       }
 
@@ -118,8 +127,8 @@ export default function App() {
         if (!row[idxId]) return null;
         
         const parseMoney = (val) => {
-          if (typeof val === 'number') return val;
           if (!val) return 0;
+          if (typeof val === 'number') return val;
           let clean = val.toString().replace('R$', '').trim();
           if (clean.includes(',') && clean.includes('.')) clean = clean.replace(/\./g, '').replace(',', '.');
           else if (clean.includes(',')) clean = clean.replace(',', '.');
@@ -127,44 +136,43 @@ export default function App() {
         };
 
         const salePrice = parseMoney(row[idxPrice]);
-        let totalShopeeFees = 0;
-        if (idxFeeComissao !== -1) totalShopeeFees += parseMoney(row[idxFeeComissao]);
-        if (idxFeeServico !== -1) totalShopeeFees += parseMoney(row[idxFeeServico]);
-        if (idxFeeTransacao !== -1) totalShopeeFees += parseMoney(row[idxFeeTransacao]);
-        
-        // Se as taxas vierem zeradas (pedido recente), estima 20%
-        if (totalShopeeFees === 0 && salePrice > 0) totalShopeeFees = salePrice * 0.20;
+        let fees = 0;
+        if (idxFeeCom !== -1) fees += parseMoney(row[idxFeeCom]);
+        if (idxFeeServ !== -1) fees += parseMoney(row[idxFeeServ]);
+        if (idxFeeTrans !== -1) fees += parseMoney(row[idxFeeTrans]);
+        if (fees === 0 && salePrice > 0) fees = salePrice * 0.20;
 
-        // Se tiver coluna de custo (Planilha Julho), usa ela. Se não, 0.
-        const costFromFile = idxCostUnit !== -1 ? parseMoney(row[idxCostUnit]) : 0;
+        // IDENTIFICAÇÃO DO PRODUTO: Tenta SKU -> depois Nome
+        const skuKey = row[idxSku] ? row[idxSku].toString().trim() : row[idxProd].toString().trim();
+        
+        // --- BUSCA O CUSTO NA SUA TABELA SALVA ---
+        // Tenta achar direto, ou limpa espaços
+        let cost = productDatabase[skuKey] || productDatabase[skuKey.replace(/\s/g, '')] || 0;
 
         return {
           temp_id: index,
           order_id: row[idxId],
           product_name: row[idxProd],
-          sku: row[idxSku] || row[idxProd], // Usa SKU ou Nome como chave
+          sku: skuKey,
           sale_price: salePrice,
-          product_cost: costFromFile, 
-          shopee_fee: Math.abs(totalShopeeFees), 
+          product_cost: cost, // Já vem preenchido se existir na lista
+          shopee_fee: Math.abs(fees), 
           fixed_fee: 0 
         };
       }).filter(Boolean);
 
-      // --- AGRUPAR POR SKU PARA O USUÁRIO EDITAR ---
+      // Agrupa para revisão
       const summaryMap = {};
       rawItems.forEach(item => {
-        const key = item.sku;
-        if (!summaryMap[key]) {
-          summaryMap[key] = {
-            sku: key,
+        if (!summaryMap[item.sku]) {
+          summaryMap[item.sku] = {
+            sku: item.sku,
             name: item.product_name,
             count: 0,
-            total_sales: 0,
-            cost: item.product_cost // Pega o custo do primeiro item (se veio do arquivo)
+            cost: item.product_cost 
           };
         }
-        summaryMap[key].count += 1;
-        summaryMap[key].total_sales += item.sale_price;
+        summaryMap[item.sku].count += 1;
       });
 
       setUniqueProducts(Object.values(summaryMap));
@@ -173,45 +181,42 @@ export default function App() {
     reader.readAsBinaryString(file);
   };
 
-  // Atualiza o custo de todos os pedidos quando o usuário edita o "Produto Único"
-  const handleCostChange = (sku, newCost) => {
-    // 1. Atualiza a lista resumida (UI)
+  // Salvar edições na tabela de importação
+  const handleImportCostChange = (sku, newCost) => {
     setUniqueProducts(prev => prev.map(p => p.sku === sku ? { ...p, cost: newCost } : p));
+    setImportedData(prev => prev.map(o => o.sku === sku ? { ...o, product_cost: newCost } : o));
     
-    // 2. Atualiza a lista completa de pedidos (Dados Reais)
-    setImportedData(prev => prev.map(order => {
-      if ((order.sku || order.product_name) === sku) {
-        return { ...order, product_cost: newCost };
-      }
-      return order;
-    }));
+    // Opcional: Atualizar a "memória" local também para o futuro
+    setProductDatabase(prev => ({...prev, [sku]: newCost}));
   };
 
+  // Salvar no Banco
   const saveBatch = async () => {
     if (!user || !supabase) return;
-    
-    const payload = importedData.map(item => ({
+    const payload = importedData.map(({ temp_id, sku, ...rest }) => ({
       user_id: user.id,
-      order_id: item.order_id,
-      product_name: item.product_name,
-      sale_price: item.sale_price,
-      product_cost: item.product_cost,
-      shopee_fee: item.shopee_fee,
-      fixed_fee: item.fixed_fee
+      ...rest,
+      fixed_fee: 3.00 // Garante a taxa fixa se não veio da planilha
     }));
 
     const { error } = await supabase.from('closings').insert(payload);
-    if (error) {
-      alert("Erro ao salvar: " + error.message);
-    } else {
+    if (!error) {
       setShowUploadModal(false);
       setImportedData([]);
-      setUniqueProducts([]);
-      alert(`Sucesso! ${payload.length} pedidos importados.`);
+      alert("Importação concluída com sucesso!");
+    } else {
+      alert("Erro: " + error.message);
     }
   };
 
-  // --- 4. Métricas e Ações ---
+  // --- Lógica da Aba de Custos (Edição Manual) ---
+  const handleUpdateDatabase = (sku, val) => {
+    setProductDatabase(prev => ({
+      ...prev,
+      [sku]: parseFloat(val) || 0
+    }));
+  };
+
   const metrics = useMemo(() => {
     const totalGross = orders.reduce((acc, o) => acc + (o.sale_price || 0), 0);
     const totalCogs = orders.reduce((acc, o) => acc + (o.product_cost || 0), 0);
@@ -221,25 +226,13 @@ export default function App() {
     return { totalGross, totalCogs, totalFees, totalProfit, margin };
   }, [orders]);
 
-  const deleteOrder = async (id) => {
-    if (confirm("Excluir este registro?")) {
-      await supabase.from('closings').delete().eq('id', id);
-    }
-  };
-
-  if (loading) return (
-    <div className="h-screen flex flex-col items-center justify-center bg-white">
-      <div className="w-12 h-12 border-4 border-orange-100 border-t-orange-500 rounded-full animate-spin"></div>
-    </div>
-  );
+  if (loading) return <div className="h-screen flex items-center justify-center">Carregando...</div>;
 
   return (
     <div className="min-h-screen bg-[#F9FAFB] text-slate-900 font-sans p-4 md:p-8">
-      {errorMsg && <div className="bg-red-500 text-white p-3 text-center font-bold mb-4 rounded-xl">{errorMsg}</div>}
-      
       <div className="max-w-7xl mx-auto space-y-8">
         
-        {/* HEADER */}
+        {/* HEADER & NAVEGAÇÃO */}
         <header className="flex flex-col md:flex-row justify-between items-center gap-6">
           <div>
             <h1 className="text-3xl font-black italic text-slate-800 flex items-center gap-2">
@@ -247,115 +240,165 @@ export default function App() {
             </h1>
             <p className="text-slate-400 text-xs font-bold uppercase tracking-widest">Painel de Lucro Real</p>
           </div>
-          <div className="flex gap-3 w-full md:w-auto">
+          
+          <div className="flex bg-white p-1 rounded-2xl shadow-sm border border-slate-100">
             <button 
-              onClick={() => setShowUploadModal(true)}
-              className="flex-1 md:flex-none bg-emerald-600 text-white px-6 py-3 rounded-2xl font-bold flex items-center justify-center gap-2 hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-200"
+              onClick={() => setActiveTab('dashboard')}
+              className={`px-6 py-3 rounded-xl font-bold text-sm flex items-center gap-2 transition-all ${activeTab === 'dashboard' ? 'bg-slate-900 text-white shadow-lg' : 'text-slate-400 hover:text-slate-600'}`}
             >
-              <Upload size={20} /> IMPORTAR PLANILHA
+              <TrendingUp size={16} /> DASHBOARD
             </button>
             <button 
-              onClick={() => setShowModal(true)}
-              className="flex-1 md:flex-none bg-[#EE4D2D] text-white px-6 py-3 rounded-2xl font-bold flex items-center justify-center gap-2 hover:bg-[#d44326] transition-all shadow-lg shadow-orange-200"
+              onClick={() => setActiveTab('costs')}
+              className={`px-6 py-3 rounded-xl font-bold text-sm flex items-center gap-2 transition-all ${activeTab === 'costs' ? 'bg-orange-500 text-white shadow-lg' : 'text-slate-400 hover:text-slate-600'}`}
             >
-              <Plus size={20} /> MANUAL
+              <Package size={16} /> CUSTOS PRODUTOS
+            </button>
+          </div>
+
+          <div className="flex gap-2">
+            <button onClick={() => setShowUploadModal(true)} className="bg-emerald-600 text-white p-3 rounded-xl shadow-lg hover:bg-emerald-700 transition-all" title="Importar">
+              <Upload size={20} />
+            </button>
+            <button onClick={() => setShowModal(true)} className="bg-[#EE4D2D] text-white p-3 rounded-xl shadow-lg hover:bg-[#d44326] transition-all" title="Manual">
+              <Plus size={20} />
             </button>
           </div>
         </header>
 
-        {/* CARDS */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <KpiCard title="Faturamento" value={metrics.totalGross} color="text-slate-800" icon={<DollarSign size={20}/>} />
-          <KpiCard title="Custo Mercadoria" value={metrics.totalCogs} color="text-red-500" icon={<Calculator size={20}/>} />
-          <KpiCard title="Taxas Shopee" value={metrics.totalFees} color="text-orange-500" icon={<AlertCircle size={20}/>} />
-          <KpiCard title="Lucro Líquido" value={metrics.totalProfit} color="text-emerald-600" icon={<TrendingUp size={20}/>} highlight sub={`Margem: ${metrics.margin.toFixed(1)}%`} />
-        </div>
+        {/* --- CONTEÚDO: DASHBOARD --- */}
+        {activeTab === 'dashboard' && (
+          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <KpiCard title="Faturamento" value={metrics.totalGross} color="text-slate-800" icon={<DollarSign size={20}/>} />
+              <KpiCard title="Custo Mercadoria" value={metrics.totalCogs} color="text-red-500" icon={<Calculator size={20}/>} />
+              <KpiCard title="Taxas Totais" value={metrics.totalFees} color="text-orange-500" icon={<AlertCircle size={20}/>} />
+              <KpiCard title="Lucro Líquido" value={metrics.totalProfit} color="text-emerald-600" icon={<TrendingUp size={20}/>} highlight sub={`Margem: ${metrics.margin.toFixed(1)}%`} />
+            </div>
 
-        {/* TABELA E GRÁFICO */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          <div className="lg:col-span-2 bg-white rounded-[2rem] border border-slate-100 shadow-sm overflow-hidden p-6">
-             <div className="flex justify-between items-center mb-6">
-               <h3 className="font-black text-slate-800 uppercase flex items-center gap-2 text-sm tracking-wide">
-                <FileText size={18} className="text-slate-400" /> Histórico ({orders.length})
-              </h3>
-             </div>
-            <div className="overflow-x-auto max-h-[500px]">
-              <table className="w-full text-left text-sm">
-                <thead className="sticky top-0 bg-white">
-                  <tr className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-50">
-                    <th className="pb-4 pl-4">Pedido</th>
-                    <th className="pb-4 text-right">Venda</th>
-                    <th className="pb-4 text-right">Taxas</th>
-                    <th className="pb-4 text-right">Lucro</th>
-                    <th className="pb-4 text-center">Ação</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-50">
-                  {orders.map(o => {
-                    const profit = o.sale_price - o.product_cost - o.shopee_fee - o.fixed_fee;
-                    return (
-                      <tr key={o.id} className="hover:bg-slate-50 transition-colors">
-                        <td className="py-4 pl-4">
-                          <div className="font-bold text-slate-700">{o.order_id}</div>
-                          <div className="text-[10px] text-slate-400 truncate max-w-[150px] font-bold uppercase">{o.product_name}</div>
-                        </td>
-                        <td className="py-4 text-right font-bold text-slate-600">R$ {o.sale_price.toFixed(2)}</td>
-                        <td className="py-4 text-right text-xs text-orange-500 font-bold">- R$ {(o.shopee_fee + o.fixed_fee).toFixed(2)}</td>
-                        <td className={`py-4 text-right font-black ${profit > 0 ? 'text-emerald-500' : 'text-red-500'}`}>
-                          R$ {profit.toFixed(2)}
-                        </td>
-                        <td className="py-4 text-center">
-                          <button onClick={() => deleteOrder(o.id)}><Trash2 size={16} className="text-slate-300 hover:text-red-500 transition-colors"/></button>
-                        </td>
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+              <div className="lg:col-span-2 bg-white rounded-[2rem] border border-slate-100 shadow-sm overflow-hidden p-6">
+                <h3 className="font-black text-slate-800 uppercase flex items-center gap-2 text-sm mb-6">
+                  <FileText size={18} className="text-slate-400" /> Histórico Recente
+                </h3>
+                <div className="overflow-x-auto max-h-[500px]">
+                  <table className="w-full text-left text-sm">
+                    <thead className="sticky top-0 bg-white">
+                      <tr className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-50">
+                        <th className="pb-4 pl-4">Pedido</th>
+                        <th className="pb-4 text-right">Venda</th>
+                        <th className="pb-4 text-right text-red-400">Custo</th>
+                        <th className="pb-4 text-right">Lucro</th>
+                        <th className="pb-4 text-center">Ação</th>
                       </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
+                    </thead>
+                    <tbody className="divide-y divide-slate-50">
+                      {orders.map(o => {
+                        const profit = o.sale_price - o.product_cost - o.shopee_fee - o.fixed_fee;
+                        return (
+                          <tr key={o.id} className="hover:bg-slate-50 transition-colors">
+                            <td className="py-4 pl-4">
+                              <div className="font-bold text-slate-700">{o.order_id}</div>
+                              <div className="text-[10px] text-slate-400 truncate max-w-[150px] font-bold uppercase">{o.product_name}</div>
+                            </td>
+                            <td className="py-4 text-right font-bold text-slate-600">R$ {o.sale_price.toFixed(2)}</td>
+                            <td className="py-4 text-right text-red-400 font-medium">R$ {o.product_cost.toFixed(2)}</td>
+                            <td className={`py-4 text-right font-black ${profit > 0 ? 'text-emerald-500' : 'text-red-500'}`}>
+                              R$ {profit.toFixed(2)}
+                            </td>
+                            <td className="py-4 text-center">
+                              <button onClick={async () => { if(confirm('Excluir?')) await supabase.from('closings').delete().eq('id', o.id) }}><Trash2 size={16} className="text-slate-300 hover:text-red-500"/></button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
 
-          <div className="space-y-6">
-            <div className="bg-white p-8 rounded-[2rem] border border-slate-100 shadow-sm h-[320px]">
-              <h3 className="font-black text-slate-800 mb-4 uppercase text-xs tracking-widest">Últimas Vendas</h3>
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={orders.slice(0,15).reverse()}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0"/>
-                  <XAxis dataKey="order_id" hide />
-                  <Tooltip cursor={{fill: '#F8FAFC'}} contentStyle={{borderRadius: '12px', border: 'none', boxShadow: '0 10px 30px rgba(0,0,0,0.05)'}} />
-                  <Bar dataKey="sale_price" fill="#EE4D2D" radius={[4,4,0,0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-            
-             <div className="bg-slate-900 p-8 rounded-[2.5rem] text-white shadow-xl shadow-slate-200">
-              <div className="flex items-center gap-3 mb-4">
-                <div className="bg-orange-500 p-2 rounded-xl"><ArrowUpRight size={20} className="text-white" /></div>
-                <h4 className="font-black text-sm uppercase tracking-widest">Performance</h4>
-              </div>
-              <p className="text-slate-400 text-xs leading-relaxed mb-4 font-medium">
-                Monitore suas taxas de perto. As taxas exibidas aqui são a soma de Comissão + Serviço + Transação da Shopee.
-              </p>
-              <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
-                <div className="bg-emerald-500 h-full transition-all duration-1000" style={{ width: `${Math.min(metrics.margin * 2, 100)}%` }}></div>
+              <div className="bg-slate-900 p-8 rounded-[2.5rem] text-white shadow-xl shadow-slate-200">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="bg-orange-500 p-2 rounded-xl"><ArrowUpRight size={20} className="text-white" /></div>
+                  <h4 className="font-black text-sm uppercase tracking-widest">Performance</h4>
+                </div>
+                <p className="text-slate-400 text-xs leading-relaxed mb-6 font-medium">
+                  Sua lista de custos padrão agora tem {Object.keys(productDatabase).length} produtos cadastrados. Isso automatiza sua importação.
+                </p>
+                <div className="h-[200px] w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={orders.slice(0,10).reverse()}>
+                      <Bar dataKey="sale_price" fill="#EE4D2D" radius={[4,4,4,4]} />
+                      <Tooltip cursor={{fill: 'transparent'}} contentStyle={{background: '#1e293b', border: 'none', color: '#fff'}}/>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
               </div>
             </div>
           </div>
-        </div>
+        )}
+
+        {/* --- CONTEÚDO: ABA DE CUSTOS --- */}
+        {activeTab === 'costs' && (
+          <div className="bg-white rounded-[2rem] border border-slate-100 shadow-sm p-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
+              <div>
+                <h2 className="text-2xl font-black text-slate-800 uppercase flex items-center gap-2">
+                  <Settings className="text-slate-300" /> Tabela de Custos Fixos
+                </h2>
+                <p className="text-slate-400 text-xs font-bold mt-1">Esses valores serão usados automaticamente nas importações</p>
+              </div>
+              <div className="bg-slate-50 p-2 rounded-xl flex items-center gap-2 border border-slate-100 w-full md:w-auto">
+                <Search size={18} className="text-slate-400 ml-2" />
+                <input 
+                  placeholder="Buscar SKU..." 
+                  className="bg-transparent outline-none font-bold text-slate-700 text-sm w-full md:w-64"
+                  onChange={(e) => setSearchTerm(e.target.value.toLowerCase())}
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {Object.entries(productDatabase)
+                .filter(([sku]) => sku.toLowerCase().includes(searchTerm))
+                .map(([sku, cost]) => (
+                <div key={sku} className="group p-4 rounded-2xl border border-slate-100 hover:border-orange-200 hover:shadow-lg transition-all bg-white relative">
+                  <div className="mb-2">
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">SKU / Produto</p>
+                    <p className="font-bold text-slate-700 text-sm truncate" title={sku}>{sku}</p>
+                  </div>
+                  <div className="flex items-center justify-between mt-4">
+                    <span className="text-xs font-bold text-slate-400 bg-slate-50 px-2 py-1 rounded-lg">Custo Unit.</span>
+                    <div className="flex items-center gap-1">
+                      <span className="text-slate-400 font-bold text-sm">R$</span>
+                      <input 
+                        type="number" 
+                        defaultValue={cost}
+                        onBlur={(e) => handleUpdateDatabase(sku, e.target.value)}
+                        className="w-20 text-right font-black text-lg text-emerald-600 outline-none border-b border-transparent focus:border-emerald-500 bg-transparent transition-all"
+                      />
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
       </div>
 
-      {/* MODAL DE UPLOAD (AGRUPADO) */}
+      {/* MODAL IMPORTAÇÃO */}
       {showUploadModal && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-[2rem] w-full max-w-5xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
             <div className="bg-emerald-600 p-6 text-white flex justify-between items-center">
               <div>
-                <h3 className="text-xl font-black italic flex items-center gap-2"><Upload/> IMPORTAR SHOPEE</h3>
+                <h3 className="text-xl font-black italic flex items-center gap-2"><Upload/> IMPORTAR PLANILHA</h3>
                 <p className="text-emerald-100 text-xs font-bold mt-1 uppercase tracking-widest">
-                  {importedData.length > 0 ? `${importedData.length} Pedidos encontrados` : 'Importação Automática'}
+                  Verificando {Object.keys(productDatabase).length} custos cadastrados
                 </p>
               </div>
-              <button onClick={() => {setShowUploadModal(false); setImportedData([]); setUniqueProducts([])}} className="hover:bg-emerald-500 p-2 rounded-lg transition-colors"><X/></button>
+              <button onClick={() => {setShowUploadModal(false); setImportedData([]);}} className="hover:bg-emerald-500 p-2 rounded-lg"><X/></button>
             </div>
             
             <div className="p-6 overflow-y-auto flex-1 bg-slate-50">
@@ -365,134 +408,86 @@ export default function App() {
                   onClick={() => fileInputRef.current.click()}
                 >
                   <input type="file" hidden ref={fileInputRef} accept=".xlsx, .xls, .csv" onChange={handleFileUpload} />
-                  <div className="bg-slate-100 p-4 rounded-full mb-4 group-hover:scale-110 transition-transform"><FileText size={40} className="text-slate-400 group-hover:text-emerald-500" /></div>
-                  <h4 className="text-lg font-black text-slate-700">Clique para selecionar</h4>
-                  <p className="text-slate-400 text-sm mt-1 font-medium">Suporta "Order.all..." (Shopee) ou Planilha com Custos</p>
+                  <FileText size={48} className="text-slate-300 group-hover:text-emerald-500 mb-4 transition-colors"/>
+                  <h4 className="text-lg font-black text-slate-700">Clique para selecionar Planilha Shopee</h4>
+                  <p className="text-slate-400 text-sm mt-1">Cruzaremos automaticamente com sua tabela de custos</p>
                 </div>
               ) : (
-                <div className="space-y-6">
-                  
-                  {/* TABELA DE PRODUTOS ÚNICOS (AGRUPADOS) */}
-                  <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-                    <div className="bg-yellow-50 p-4 border-b border-yellow-100 flex items-center gap-3">
-                       <Package className="text-yellow-600" size={20}/>
-                       <div>
-                         <h4 className="font-black text-yellow-800 text-sm uppercase">Definição de Custos</h4>
-                         <p className="text-yellow-700 text-xs">Agrupamos {importedData.length} pedidos em {uniqueProducts.length} produtos únicos. Defina o custo unitário abaixo:</p>
-                       </div>
-                    </div>
-                    
-                    <table className="w-full text-left text-xs">
-                      <thead className="bg-slate-50 uppercase font-black text-slate-400 border-b border-slate-100">
-                        <tr>
-                          <th className="p-4">Produto / SKU</th>
-                          <th className="p-4 text-center">Qtd Vendas</th>
-                          <th className="p-4 text-right text-red-400">Custo Unitário (R$)</th>
-                          <th className="p-4 text-right">Status</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-50">
-                        {uniqueProducts.map((prod, idx) => (
-                          <tr key={idx} className={prod.cost === 0 ? 'bg-red-50/50' : ''}>
-                            <td className="p-4">
-                              <div className="font-bold text-slate-700 truncate max-w-[300px]">{prod.name}</div>
-                              <div className="text-[10px] text-slate-400 font-mono mt-1">{prod.sku}</div>
-                            </td>
-                            <td className="p-4 text-center font-bold text-slate-600 bg-slate-50/50">
-                              {prod.count}x
-                            </td>
-                            <td className="p-4 text-right">
-                              <input 
-                                type="number" 
-                                value={prod.cost}
-                                onChange={(e) => handleCostChange(prod.sku, parseFloat(e.target.value) || 0)} 
-                                className="w-24 bg-white border border-slate-200 p-2 rounded-lg text-right font-bold text-red-500 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 outline-none transition-all"
-                                placeholder="0.00"
-                              />
-                            </td>
-                            <td className="p-4 text-right">
-                              {prod.cost > 0 ? (
-                                <span className="inline-flex items-center gap-1 text-emerald-600 font-bold bg-emerald-50 px-2 py-1 rounded-md">
-                                  <Check size={12}/> OK
-                                </span>
-                              ) : (
-                                <span className="text-red-400 font-bold text-[10px] uppercase">Pendente</span>
-                              )}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+                  <div className="bg-yellow-50 p-4 border-b border-yellow-100 flex items-center gap-3">
+                     <Settings className="text-yellow-600" size={20}/>
+                     <div>
+                       <h4 className="font-black text-yellow-800 text-sm uppercase">Revisão de Custos</h4>
+                       <p className="text-yellow-700 text-xs">Itens com <Check size={10} className="inline"/> encontraram o custo automático. Edite se necessário.</p>
+                     </div>
                   </div>
-
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-50 uppercase font-black text-slate-400 border-b border-slate-100">
+                      <tr>
+                        <th className="p-4">SKU Encontrado</th>
+                        <th className="p-4 text-center">Vendas</th>
+                        <th className="p-4 text-right">Custo Unit. (R$)</th>
+                        <th className="p-4 text-center">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-50">
+                      {uniqueProducts.map((prod, idx) => (
+                        <tr key={idx} className={prod.cost === 0 ? 'bg-red-50/50' : ''}>
+                          <td className="p-4 font-bold text-slate-700">{prod.sku}</td>
+                          <td className="p-4 text-center font-mono text-slate-500">{prod.count}</td>
+                          <td className="p-4 text-right">
+                            <input 
+                              type="number" 
+                              value={prod.cost}
+                              onChange={(e) => handleImportCostChange(prod.sku, parseFloat(e.target.value) || 0)} 
+                              className={`w-24 border p-2 rounded-lg text-right font-bold outline-none ${prod.cost === 0 ? 'border-red-300 text-red-500' : 'border-slate-200 text-emerald-600'}`}
+                            />
+                          </td>
+                          <td className="p-4 text-center">
+                            {prod.cost > 0 ? <Check size={16} className="text-emerald-500 inline"/> : <span className="text-red-400 font-bold text-[10px]">PENDENTE</span>}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               )}
             </div>
 
             {importedData.length > 0 && (
               <div className="p-6 border-t border-slate-100 bg-white flex justify-end gap-3">
-                <button onClick={() => {setImportedData([]); setUniqueProducts([])}} className="px-6 py-4 font-bold text-slate-400 hover:bg-slate-50 rounded-xl transition-colors">Cancelar</button>
-                <button 
-                  onClick={saveBatch}
-                  className="bg-emerald-600 text-white px-8 py-4 rounded-xl font-black flex items-center gap-2 hover:bg-emerald-700 shadow-xl shadow-emerald-100 transition-transform active:scale-95"
-                >
-                  <Save size={20} /> SALVAR TUDO
-                </button>
+                <button onClick={() => setImportedData([])} className="px-6 py-4 font-bold text-slate-400">Cancelar</button>
+                <button onClick={saveBatch} className="bg-emerald-600 text-white px-8 py-4 rounded-xl font-black shadow-xl hover:bg-emerald-700">SALVAR {importedData.length} PEDIDOS</button>
               </div>
             )}
           </div>
         </div>
       )}
 
-      {/* MODAL MANUAL */}
+      {/* MODAL MANUAL (Mantido igual) */}
       {showModal && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-md flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-[2.5rem] w-full max-w-md p-8 relative shadow-2xl animate-in zoom-in-95 duration-200">
+          <div className="bg-white rounded-[2.5rem] w-full max-w-md p-8 relative shadow-2xl">
             <button onClick={() => setShowModal(false)} className="absolute top-6 right-6 p-2 bg-slate-50 rounded-full hover:bg-slate-100"><X size={20}/></button>
-            <div className="mb-8">
-              <h2 className="text-2xl font-black italic text-slate-800">LANÇAMENTO</h2>
-              <p className="text-slate-400 text-xs font-bold uppercase tracking-widest">Manual</p>
-            </div>
-            
+            <h2 className="text-2xl font-black italic text-slate-800 mb-6">LANÇAMENTO MANUAL</h2>
             <form onSubmit={async (e) => {
               e.preventDefault();
               const fd = new FormData(e.target);
               const sale = parseFloat(fd.get('sale_price'));
-              const { error } = await supabase.from('closings').insert([{
-                user_id: user.id,
-                order_id: fd.get('order_id'),
-                product_name: fd.get('product_name'),
-                sale_price: sale,
-                product_cost: parseFloat(fd.get('product_cost')),
-                shopee_fee: sale * 0.20, 
-                fixed_fee: 3.00
+              await supabase.from('closings').insert([{
+                user_id: user.id, order_id: fd.get('order_id'), product_name: fd.get('product_name'),
+                sale_price: sale, product_cost: parseFloat(fd.get('product_cost')),
+                shopee_fee: sale * 0.20, fixed_fee: 3.00
               }]);
-              if(!error) setShowModal(false);
-              else alert(error.message);
-            }} className="space-y-5">
-              
-              <div className="space-y-1">
-                <label className="text-[10px] uppercase font-black text-slate-400 ml-2">ID Pedido</label>
-                <input name="order_id" className="w-full p-4 bg-slate-50 rounded-2xl font-bold text-slate-700 outline-none focus:ring-2 focus:ring-orange-200" required/>
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-[10px] uppercase font-black text-slate-400 ml-2">Produto</label>
-                <input name="product_name" className="w-full p-4 bg-slate-50 rounded-2xl font-bold text-slate-700 outline-none focus:ring-2 focus:ring-orange-200" required/>
-              </div>
-
+              setShowModal(false);
+            }} className="space-y-4">
+              <input name="order_id" placeholder="ID Pedido" className="w-full p-4 bg-slate-50 rounded-xl font-bold" required/>
+              <input name="product_name" placeholder="Produto" className="w-full p-4 bg-slate-50 rounded-xl font-bold" required/>
               <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1">
-                  <label className="text-[10px] uppercase font-black text-slate-400 ml-2">Venda (R$)</label>
-                  <input name="sale_price" type="number" step="0.01" className="w-full p-4 bg-slate-50 rounded-2xl font-black text-slate-800 outline-none focus:ring-2 focus:ring-orange-200" required/>
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[10px] uppercase font-black text-slate-400 ml-2">Custo (R$)</label>
-                  <input name="product_cost" type="number" step="0.01" className="w-full p-4 bg-slate-50 rounded-2xl font-black text-red-500 outline-none focus:ring-2 focus:ring-red-200" required/>
-                </div>
+                <input name="sale_price" type="number" step="0.01" placeholder="Venda" className="p-4 bg-slate-50 rounded-xl font-bold" required/>
+                <input name="product_cost" type="number" step="0.01" placeholder="Custo" className="p-4 bg-slate-50 rounded-xl font-bold" required/>
               </div>
-
-              <button className="w-full bg-[#EE4D2D] text-white py-5 rounded-2xl font-black hover:bg-[#d44326] transition-all shadow-xl shadow-orange-100 active:scale-95 mt-2">CONFIRMAR LANÇAMENTO</button>
+              <button className="w-full bg-[#EE4D2D] text-white py-4 rounded-xl font-black mt-2">SALVAR</button>
             </form>
           </div>
         </div>
@@ -502,13 +497,13 @@ export default function App() {
 }
 
 const KpiCard = ({ title, value, icon, color, sub, highlight }) => (
-  <div className={`p-6 rounded-[2rem] border ${highlight ? 'bg-white border-emerald-100 ring-4 ring-emerald-50/50' : 'bg-white border-slate-100'} shadow-sm hover:shadow-md transition-all`}>
+  <div className={`p-6 rounded-[2rem] border ${highlight ? 'bg-white border-emerald-100 ring-4 ring-emerald-50/50' : 'bg-white border-slate-100'} shadow-sm`}>
     <div className="flex justify-between items-start mb-4">
       <div className={`p-3 bg-slate-50 rounded-2xl ${color}`}>{icon}</div>
       <ChevronRight size={16} className="text-slate-200" />
     </div>
     <p className="text-slate-400 text-[10px] font-black uppercase tracking-[0.2em] mb-1">{title}</p>
     <h3 className={`text-2xl font-black ${color} tracking-tight`}>R$ {value?.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</h3>
-    {sub && <p className="text-[11px] font-bold text-slate-400 mt-2 uppercase tracking-tight">{sub}</p>}
+    {sub && <p className="text-[11px] font-bold text-slate-400 mt-2">{sub}</p>}
   </div>
 );
