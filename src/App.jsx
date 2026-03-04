@@ -1,3 +1,6 @@
+// ShopeeFlow PRO - Dashboard de Análise de Vendas
+// Versão: 2.0 - Com análise ABC e detetive financeiro
+
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import * as XLSX from 'xlsx';
 import { 
@@ -73,6 +76,29 @@ export default function App() {
     } catch (e) { alert("Erro ao atualizar"); }
   };
 
+  const clearAllData = async () => {
+    if (!confirm('Tem certeza que deseja apagar TODOS os dados de vendas? Esta ação não pode ser desfeita e afetará todo o seu histórico.')) return;
+    if (!confirm('Confirmação final: Todos os pedidos, análises e relatórios serão permanentemente excluídos.')) return;
+    
+    try {
+      const response = await fetch('/api/orders', {
+        method: 'DELETE',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ user_id: userId })
+      });
+      
+      if (response.ok) {
+        alert('Todos os dados foram apagados com sucesso!');
+        setOrders([]);
+        fetchOrders();
+      } else {
+        throw new Error('Erro ao limpar dados');
+      }
+    } catch (e) { 
+      alert("Erro ao limpar dados. Tente novamente."); 
+    }
+  };
+
   // --- CÁLCULOS ---
   const analytics = useMemo(() => {
     const validOrders = orders.filter(o => !o.status?.toLowerCase().includes('cancelado'));
@@ -111,12 +137,21 @@ export default function App() {
     const dailyChartData = Object.values(dailyMap)
       .sort((a,b) => new Date(a.fullDate) - new Date(b.fullDate));
 
-    // Produtos
+    // Produtos com análise ABC e ticket médio
     const productStats = {};
     validOrders.forEach(o => {
        const sku = o.sku || 'SEM SKU';
        if(!productStats[sku]) {
-         productStats[sku] = { sku: sku, name: o.product_name, qtd: 0, revenue: 0, cost: 0, profit: 0, unitCost: o.product_cost };
+         productStats[sku] = { 
+           sku: sku, 
+           name: o.product_name, 
+           qtd: 0, 
+           revenue: 0, 
+           cost: 0, 
+           profit: 0, 
+           unitCost: o.product_cost,
+           orders: []
+         };
        }
        const p = productStats[sku];
        const fees = (Number(o.shopee_fee)||0) + (Number(o.fixed_fee)||0) + (Number(o.seller_voucher)||0);
@@ -125,10 +160,33 @@ export default function App() {
        p.revenue += Number(o.sale_price);
        p.cost += Number(o.product_cost);
        p.profit += (o.sale_price - o.product_cost - fees);
+       p.orders.push(o);
     });
-    const productList = Object.values(productStats).sort((a,b) => b.revenue - a.revenue);
+    
+    // Cálculo do ticket médio e margem
+    Object.values(productStats).forEach(p => {
+      p.avgTicket = p.qtd > 0 ? p.revenue / p.qtd : 0;
+      p.margin = p.revenue > 0 ? (p.profit / p.revenue) * 100 : 0;
+    });
+    
+    // Análise ABC baseada no faturamento
+    const sortedByRevenue = Object.values(productStats).sort((a,b) => b.revenue - a.revenue);
+    const totalRevenue = sortedByRevenue.reduce((acc, p) => acc + p.revenue, 0);
+    
+    let accumulatedRevenue = 0;
+    const productListWithABC = sortedByRevenue.map(p => {
+      accumulatedRevenue += p.revenue;
+      const percentage = (accumulatedRevenue / totalRevenue) * 100;
+      
+      let category = 'D'; // Default para produtos de baixo desempenho
+      if (percentage <= 80) category = 'A';
+      else if (percentage <= 90) category = 'B';
+      else if (percentage <= 95) category = 'C';
+      
+      return { ...p, category };
+    });
 
-    return { totalGross, totalCogs, totalFees, totalProfit, margin, dailyChartData, productList };
+    return { totalGross, totalCogs, totalFees, totalProfit, margin, dailyChartData, productList: productListWithABC };
   }, [orders]);
 
   // --- IMPORTAÇÃO INTELIGENTE ---
@@ -324,42 +382,420 @@ export default function App() {
               </div>
             )}
 
-            {/* === ABA PRODUTOS (CORRIGIDA) === */}
+            {/* === ABA PRODUTOS TÉCNICOS COM ANÁLISE ABC === */}
             {activeTab === 'products' && (
               <div className="space-y-6 animate-in fade-in">
+                {/* Insights e Recomendações */}
+                <div className="bg-gradient-to-r from-blue-500 to-purple-600 text-white p-6 rounded-2xl shadow-lg">
+                  <h3 className="font-bold text-lg mb-4 flex items-center gap-2">
+                    <TrendingUp size={20}/> Insights de Vendas - Análise ABC
+                  </h3>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="bg-white/20 backdrop-blur rounded-lg p-4">
+                      <div className="text-2xl font-bold">{analytics.productList.filter(p => p.category === 'A').length}</div>
+                      <div className="text-sm opacity-90">Produtos Categoria A</div>
+                      <div className="text-xs opacity-75 mt-1">Representam ~80% do faturamento</div>
+                    </div>
+                    <div className="bg-white/20 backdrop-blur rounded-lg p-4">
+                      <div className="text-2xl font-bold">{analytics.productList.filter(p => p.category === 'B').length}</div>
+                      <div className="text-sm opacity-90">Produtos Categoria B</div>
+                      <div className="text-xs opacity-75 mt-1">Representam ~10% do faturamento</div>
+                    </div>
+                    <div className="bg-white/20 backdrop-blur rounded-lg p-4">
+                      <div className="text-2xl font-bold">{analytics.productList.filter(p => p.category === 'C').length}</div>
+                      <div className="text-sm opacity-90">Produtos Categoria C</div>
+                      <div className="text-xs opacity-75 mt-1">Representam ~5% do faturamento</div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Recomendações Estratégicas */}
+                <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
+                  <h4 className="font-bold text-slate-700 mb-4">Recomendações Estratégicas</h4>
+                  <div className="space-y-3">
+                    <div className="flex items-start gap-3 p-3 bg-green-50 rounded-lg">
+                      <div className="bg-green-500 text-white rounded-full p-1 mt-1">
+                        <Check size={12}/>
+                      </div>
+                      <div>
+                        <div className="font-bold text-green-800">Foque nos Produtos Categoria A</div>
+                        <div className="text-sm text-green-600">Aumente o estoque e invista em marketing para esses produtos que geram 80% do seu faturamento.</div>
+                      </div>
+                    </div>
+                    <div className="flex items-start gap-3 p-3 bg-yellow-50 rounded-lg">
+                      <div className="bg-yellow-500 text-white rounded-full p-1 mt-1">
+                        <AlertCircle size={12}/>
+                      </div>
+                      <div>
+                        <div className="font-bold text-yellow-800">Analise os Produtos Categoria B</div>
+                        <div className="text-sm text-yellow-600">Considere estratégias para mover esses produtos para a categoria A através de otimização de preços ou marketing.</div>
+                      </div>
+                    </div>
+                    <div className="flex items-start gap-3 p-3 bg-red-50 rounded-lg">
+                      <div className="bg-red-500 text-white rounded-full p-1 mt-1">
+                        <X size={12}/>
+                      </div>
+                      <div>
+                        <div className="font-bold text-red-800">Reavalie Produtos Categoria C e D</div>
+                        <div className="text-sm text-red-600">Considere descontinuar produtos com baixo desempenho ou baixar os custos para melhorar a margem.</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Tabela Detalhada de Produtos */}
                 <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-                   <table className="w-full text-left text-xs">
-                     <thead className="bg-slate-50 uppercase font-black text-slate-400 border-b border-slate-200">
-                       <tr><th className="p-4">SKU</th><th className="p-4 text-center">Qtd</th><th className="p-4 text-right">Margem</th><th className="p-4 text-right">Lucro</th><th className="p-4 text-right">Custo Unit.</th></tr>
-                     </thead>
-                     <tbody className="divide-y divide-slate-100">
-                       {analytics.productList.map((prod, idx) => (
-                         <tr key={idx} className="hover:bg-slate-50">
-                             <td className="p-4 font-bold text-slate-700">{prod.sku}</td>
-                             <td className="p-4 text-center">{prod.qtd}</td>
-                             <td className="p-4 text-right"><span className={`px-2 py-1 rounded font-bold ${prod.profit > 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>{((prod.profit/prod.revenue)*100).toFixed(1)}%</span></td>
-                             <td className="p-4 text-right font-bold text-slate-700">R$ {prod.profit.toFixed(2)}</td>
-                             <td className="p-4 text-right">
-                               {editingProduct === prod.sku ? (
-                                 <input autoFocus className="w-16 border p-1 rounded" defaultValue={prod.unitCost} 
-                                   onKeyDown={(e) => e.key === 'Enter' && updateProductCost(prod.sku, e.target.value)} 
-                                   onBlur={() => setEditingProduct(null)} />
-                               ) : (
-                                 <button onClick={() => setEditingProduct(prod.sku)} className="hover:text-orange-500 font-bold">R$ {prod.unitCost.toFixed(2)} <Edit2 size={10} className="inline"/></button>
-                               )}
-                             </td>
+                   <div className="p-4 bg-slate-50 border-b border-slate-200">
+                     <h3 className="font-bold text-slate-700">Análise Técnica de Produtos</h3>
+                   </div>
+                   <div className="overflow-x-auto">
+                     <table className="w-full text-left text-xs">
+                       <thead className="bg-slate-50 uppercase font-black text-slate-400 border-b border-slate-200">
+                         <tr>
+                           <th className="p-4">SKU</th>
+                           <th className="p-4 text-center">Cat.</th>
+                           <th className="p-4 text-center">Qtd</th>
+                           <th className="p-4 text-right">Faturamento</th>
+                           <th className="p-4 text-right">Ticket Médio</th>
+                           <th className="p-4 text-right">Margem</th>
+                           <th className="p-4 text-right">Lucro Total</th>
+                           <th className="p-4 text-right">Custo Unit.</th>
                          </tr>
-                       ))}
-                     </tbody>
-                   </table>
+                       </thead>
+                       <tbody className="divide-y divide-slate-100">
+                         {analytics.productList.map((prod, idx) => (
+                           <tr key={idx} className="hover:bg-slate-50">
+                               <td className="p-4 font-bold text-slate-700">
+                                 <div>{prod.sku}</div>
+                                 <div className="text-xs text-slate-500 truncate max-w-xs" title={prod.name}>{prod.name}</div>
+                               </td>
+                               <td className="p-4 text-center">
+                                 <span className={`px-2 py-1 rounded font-bold text-xs ${
+                                   prod.category === 'A' ? 'bg-green-100 text-green-700' :
+                                   prod.category === 'B' ? 'bg-yellow-100 text-yellow-700' :
+                                   prod.category === 'C' ? 'bg-orange-100 text-orange-700' :
+                                   'bg-red-100 text-red-700'
+                                 }`}>
+                                   {prod.category}
+                                 </span>
+                               </td>
+                               <td className="p-4 text-center font-bold">{prod.qtd}</td>
+                               <td className="p-4 text-right font-bold">R$ {prod.revenue.toFixed(2)}</td>
+                               <td className="p-4 text-right">R$ {prod.avgTicket.toFixed(2)}</td>
+                               <td className="p-4 text-right">
+                                 <span className={`px-2 py-1 rounded font-bold ${
+                                   prod.margin > 20 ? 'bg-green-100 text-green-700' :
+                                   prod.margin > 10 ? 'bg-yellow-100 text-yellow-700' :
+                                   'bg-red-100 text-red-700'
+                                 }`}>
+                                   {prod.margin.toFixed(1)}%
+                                 </span>
+                               </td>
+                               <td className="p-4 text-right font-bold">
+                                 <span className={prod.profit > 0 ? 'text-green-600' : 'text-red-600'}>
+                                   R$ {prod.profit.toFixed(2)}
+                                 </span>
+                               </td>
+                               <td className="p-4 text-right">
+                                 {editingProduct === prod.sku ? (
+                                   <input autoFocus className="w-16 border p-1 rounded" defaultValue={prod.unitCost} 
+                                     onKeyDown={(e) => e.key === 'Enter' && updateProductCost(prod.sku, e.target.value)} 
+                                     onBlur={() => setEditingProduct(null)} />
+                                 ) : (
+                                   <button onClick={() => setEditingProduct(prod.sku)} className="hover:text-orange-500 font-bold">R$ {prod.unitCost.toFixed(2)} <Edit2 size={10} className="inline"/></button>
+                                 )}
+                               </td>
+                           </tr>
+                         ))}
+                       </tbody>
+                     </table>
+                   </div>
                 </div>
               </div>
             )}
 
             {/* === DETETIVE FINANCEIRO (COMPLETO) === */}
             {activeTab === 'detective' && (
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-in fade-in">
-                 <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden h-[600px] flex flex-col">
-                    <div className="p-4 bg-slate-50 border-b border-slate-200"><h3 className="font-bold">Pedidos</h3></div>
-                    <div className="overflow-y-auto flex-1 p-2">
-                       {orders.filter(o => !o.status.includes('Cancel')).map
+              <div className="space-y-6 animate-in fade-in">
+                <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                  <div className="p-6 border-b border-slate-200">
+                    <h3 className="font-bold text-slate-700 flex items-center gap-2">
+                      <Search size={18}/> Pedidos com Prejuízo
+                    </h3>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-50 uppercase font-black text-slate-400 border-b border-slate-200">
+                        <tr>
+                          <th className="p-4">Pedido</th>
+                          <th className="p-4">Produto</th>
+                          <th className="p-4 text-right">Venda</th>
+                          <th className="p-4 text-right">Custo</th>
+                          <th className="p-4 text-right">Taxas</th>
+                          <th className="p-4 text-right">Lucro</th>
+                          <th className="p-4 text-center">Ações</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {orders.filter(o => {
+                          if (o.status?.toLowerCase().includes('cancelado')) return false;
+                          const fees = (Number(o.shopee_fee)||0) + (Number(o.fixed_fee)||0) + 
+                                      (Number(o.seller_voucher)||0) + (Number(o.coins_cashback)||0);
+                          const profit = (Number(o.sale_price)||0) - (Number(o.product_cost)||0) - fees;
+                          return profit < 0;
+                        }).map((order, idx) => {
+                          const fees = (Number(order.shopee_fee)||0) + (Number(order.fixed_fee)||0) + 
+                                      (Number(order.seller_voucher)||0) + (Number(order.coins_cashback)||0);
+                          const profit = (Number(order.sale_price)||0) - (Number(order.product_cost)||0) - fees;
+                          return (
+                            <tr key={idx} className="hover:bg-slate-50">
+                              <td className="p-4 font-bold text-slate-700">{order.order_id}</td>
+                              <td className="p-4">
+                                <div className="max-w-xs truncate" title={order.product_name}>
+                                  {order.product_name}
+                                </div>
+                              </td>
+                              <td className="p-4 text-right font-bold">R$ {Number(order.sale_price).toFixed(2)}</td>
+                              <td className="p-4 text-right text-red-600">R$ {Number(order.product_cost).toFixed(2)}</td>
+                              <td className="p-4 text-right text-orange-500">R$ {fees.toFixed(2)}</td>
+                              <td className="p-4 text-right">
+                                <span className="px-2 py-1 rounded font-bold bg-red-100 text-red-700">
+                                  R$ {profit.toFixed(2)}
+                                </span>
+                              </td>
+                              <td className="p-4 text-center">
+                                <button 
+                                  onClick={() => setSelectedOrder(order)}
+                                  className="bg-blue-500 text-white px-3 py-1 rounded text-xs hover:bg-blue-600"
+                                >
+                                  Detalhes
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* === MODAL DETALHES DO PEDIDO === */}
+            {selectedOrder && (
+              <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+                  <div className="p-6 border-b border-slate-200 flex justify-between items-center">
+                    <h3 className="font-bold text-lg text-slate-700">Detalhes do Pedido</h3>
+                    <button onClick={() => setSelectedOrder(null)} className="text-slate-400 hover:text-slate-600">
+                      <X size={20}/>
+                    </button>
+                  </div>
+                  <div className="p-6 space-y-4">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="text-xs text-slate-500 uppercase">ID do Pedido</label>
+                        <p className="font-bold">{selectedOrder.order_id}</p>
+                      </div>
+                      <div>
+                        <label className="text-xs text-slate-500 uppercase">Status</label>
+                        <p className="font-bold">{selectedOrder.status}</p>
+                      </div>
+                      <div>
+                        <label className="text-xs text-slate-500 uppercase">Data do Pedido</label>
+                        <p className="font-bold">{new Date(selectedOrder.creation_date || selectedOrder.created_at).toLocaleDateString('pt-BR')}</p>
+                      </div>
+                      <div>
+                        <label className="text-xs text-slate-500 uppercase">SKU</label>
+                        <p className="font-bold">{selectedOrder.sku}</p>
+                      </div>
+                    </div>
+                    
+                    <div>
+                      <label className="text-xs text-slate-500 uppercase">Produto</label>
+                      <p className="font-bold">{selectedOrder.product_name}</p>
+                    </div>
+
+                    <div className="border-t pt-4">
+                      <h4 className="font-bold mb-3">Análise Financeira</h4>
+                      <div className="space-y-2">
+                        <div className="flex justify-between">
+                          <span>Valor da Venda:</span>
+                          <span className="font-bold">R$ {Number(selectedOrder.sale_price).toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Custo do Produto:</span>
+                          <span className="font-bold text-red-600">-R$ {Number(selectedOrder.product_cost).toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Taxa Shopee:</span>
+                          <span className="font-bold text-orange-500">-R$ {Number(selectedOrder.shopee_fee || 0).toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Taxa Fixa:</span>
+                          <span className="font-bold text-orange-500">-R$ {Number(selectedOrder.fixed_fee || 0).toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Cupom do Vendedor:</span>
+                          <span className="font-bold text-orange-500">-R$ {Number(selectedOrder.seller_voucher || 0).toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Moedas Cashback:</span>
+                          <span className="font-bold text-orange-500">-R$ {Number(selectedOrder.coins_cashback || 0).toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Taxa Envio Reverso:</span>
+                          <span className="font-bold text-orange-500">-R$ {Number(selectedOrder.reverse_shipping_fee || 0).toFixed(2)}</span>
+                        </div>
+                        <div className="border-t pt-2 flex justify-between">
+                          <span className="font-bold">Lucro/Prejuízo:</span>
+                          <span className={`font-bold text-lg ${
+                            ((Number(selectedOrder.sale_price)||0) - 
+                             (Number(selectedOrder.product_cost)||0) - 
+                             (Number(selectedOrder.shopee_fee)||0) - 
+                             (Number(selectedOrder.fixed_fee)||0) - 
+                             (Number(selectedOrder.seller_voucher)||0) - 
+                             (Number(selectedOrder.coins_cashback)||0) - 
+                             (Number(selectedOrder.reverse_shipping_fee)||0)) >= 0 
+                            ? 'text-green-600' : 'text-red-600'
+                          }`}>
+                            R$ {((Number(selectedOrder.sale_price)||0) - 
+                             (Number(selectedOrder.product_cost)||0) - 
+                             (Number(selectedOrder.shopee_fee)||0) - 
+                             (Number(selectedOrder.fixed_fee)||0) - 
+                             (Number(selectedOrder.seller_voucher)||0) - 
+                             (Number(selectedOrder.coins_cashback)||0) - 
+                             (Number(selectedOrder.reverse_shipping_fee)||0)).toFixed(2)}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+
+        {/* === MODAL IMPORTAÇÃO === */}
+        {showUploadModal && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+              <div className="p-6 border-b border-slate-200 flex justify-between items-center">
+                <h3 className="font-bold text-lg text-slate-700">Importar Planilha de Vendas</h3>
+                <button onClick={() => setShowUploadModal(false)} className="text-slate-400 hover:text-slate-600">
+                  <X size={20}/>
+                </button>
+              </div>
+              <div className="p-6 space-y-4">
+                <div className="border-2 border-dashed border-slate-300 rounded-lg p-8 text-center">
+                  <Upload size={48} className="mx-auto text-slate-400 mb-4"/>
+                  <p className="text-slate-600 mb-4">Arraste a planilha ou clique para selecionar</p>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".xlsx,.xls"
+                    onChange={handleFileUpload}
+                    className="hidden"
+                  />
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    className="bg-orange-500 text-white px-6 py-2 rounded-lg font-bold hover:bg-orange-600"
+                  >
+                    Selecionar Arquivo
+                  </button>
+                </div>
+                
+                {importedData.length > 0 && (
+                  <div className="space-y-4">
+                    <div className="flex justify-between items-center">
+                      <h4 className="font-bold">Pré-visualização ({importedData.length} registros)</h4>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => setImportedData([])}
+                          className="bg-slate-200 text-slate-700 px-4 py-2 rounded-lg font-bold hover:bg-slate-300"
+                        >
+                          Limpar
+                        </button>
+                        <button
+                          onClick={saveBatch}
+                          className="bg-green-500 text-white px-4 py-2 rounded-lg font-bold hover:bg-green-600"
+                        >
+                          Importar Dados
+                        </button>
+                      </div>
+                    </div>
+                    <div className="bg-slate-50 rounded-lg p-4 max-h-60 overflow-y-auto">
+                      <table className="w-full text-xs">
+                        <thead className="border-b">
+                          <tr>
+                            <th className="text-left p-2">Pedido</th>
+                            <th className="text-left p-2">Produto</th>
+                            <th className="text-right p-2">Valor</th>
+                            <th className="text-right p-2">Custo</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {importedData.slice(0, 10).map((row, idx) => (
+                            <tr key={idx} className="border-b">
+                              <td className="p-2">{row.order_id}</td>
+                              <td className="p-2 truncate max-w-xs">{row.product_name}</td>
+                              <td className="p-2 text-right">R$ {row.sale_price.toFixed(2)}</td>
+                              <td className="p-2 text-right">R$ {row.product_cost.toFixed(2)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      {importedData.length > 10 && (
+                        <p className="text-center text-slate-500 mt-2">... e mais {importedData.length - 10} registros</p>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* === BOTÃO LIMPAR DADOS === */}
+        <div className="fixed bottom-4 right-4">
+          <button
+            onClick={clearAllData}
+            className="bg-red-500 text-white px-4 py-2 rounded-lg font-bold hover:bg-red-600 flex items-center gap-2 shadow-lg"
+          >
+            <Trash2 size={16}/> Limpar Dados
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Componentes Auxiliares
+function TabButton({ active, onClick, icon, label }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`flex items-center gap-2 px-4 py-2 rounded-t-lg font-bold text-xs transition-colors ${
+        active 
+          ? 'bg-white text-slate-900 border-b-2 border-orange-500' 
+          : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'
+      }`}
+    >
+      {icon} {label}
+    </button>
+  );
+}
+
+function KpiCard({ title, value, icon, color, textColor, border, sub }) {
+  return (
+    <div className={`${color} ${border ? 'border border-slate-200' : ''} p-4 rounded-2xl shadow-sm`}>
+      <div className="flex items-center justify-between mb-2">
+        <span className={`${textColor} text-xs font-bold uppercase opacity-70`}>{title}</span>
+        <div className={`${textColor} opacity-70`}>{icon}</div>
+      </div>
+      <div className={`${textColor} text-2xl font-black`}>R$ {value.toFixed(2)}</div>
+      {sub && <div className={`${textColor} text-xs opacity-70 mt-1`}>{sub}</div>}
+    </div>
+  );
+}

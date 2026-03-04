@@ -61,4 +61,12 @@ export default async function handler(req, res) {
        return res.status(200).json({ message: 'Updated' });
     } catch (error) { return res.status(500).json({ error: error.message }); }
   }
+
+  if (req.method === 'DELETE') {
+    const { user_id } = req.body;
+    try {
+      await sql`DELETE FROM closings WHERE user_id = ${user_id}::uuid`;
+      return res.status(200).json({ message: 'All data cleared successfully' });
+    } catch (error) { return res.status(500).json({ error: error.message }); }
+  }
 }
