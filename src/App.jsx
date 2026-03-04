@@ -78,7 +78,7 @@ export default function App() {
     return () => supabase.removeChannel(channel);
   }, [user]);
 
-  // --- 3. Lógica de Importação de Excel ---
+  // --- 3. Lógica de Importação de Excel (Shopee Format) ---
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -89,40 +89,68 @@ export default function App() {
       const wb = XLSX.read(bstr, { type: 'binary' });
       const wsname = wb.SheetNames[0];
       const ws = wb.Sheets[wsname];
-      const data = XLSX.utils.sheet_to_json(ws, { header: 1 }); // Lê como matriz
+      const data = XLSX.utils.sheet_to_json(ws, { header: 1 });
 
-      // Tenta achar cabeçalhos comuns da Shopee
       if (!data || data.length === 0) return;
+
+      // Normaliza cabeçalhos para encontrar as colunas
       const headers = data[0].map(h => h?.toString().toLowerCase().trim());
       
-      const idxId = headers.findIndex(h => h.includes('número do pedido') || h.includes('order id'));
-      const idxProd = headers.findIndex(h => h.includes('nome do produto') || h.includes('product name'));
-      const idxPrice = headers.findIndex(h => h.includes('preço') || h.includes('valor') || h.includes('price'));
+      // Mapeamento exato da Planilha Shopee
+      const idxId = headers.findIndex(h => h === 'id do pedido');
+      const idxProd = headers.findIndex(h => h === 'nome do produto');
+      // "Preço acordado" é o valor real da venda após descontos do vendedor
+      const idxPrice = headers.findIndex(h => h === 'preço acordado' || h === 'preço original');
       
-      if (idxId === -1 || idxPrice === -1) {
-        alert("Não conseguimos identificar as colunas 'Número do Pedido' ou 'Preço'. Verifique se é a planilha correta da Shopee.");
+      // Colunas de taxas (para somar o custo total da Shopee)
+      const idxFeeComissao = headers.findIndex(h => h.includes('taxa de comissão'));
+      const idxFeeServico = headers.findIndex(h => h.includes('taxa de serviço'));
+      const idxFeeTransacao = headers.findIndex(h => h.includes('taxa de transação'));
+
+      if (idxId === -1 || idxProd === -1) {
+        alert("Erro: Não encontramos as colunas 'ID do pedido' ou 'Nome do Produto'. Verifique se é a planilha oficial da Shopee.");
         return;
       }
 
       const preview = data.slice(1).map((row, index) => {
         if (!row[idxId]) return null;
         
-        // Limpeza de valores monetários (Ex: "R$ 29,90" -> 29.90)
-        let rawPrice = row[idxPrice];
-        if (typeof rawPrice === 'string') {
-          rawPrice = parseFloat(rawPrice.replace('R$', '').replace(/\./g, '').replace(',', '.').trim());
+        // Função auxiliar para limpar valores monetários (ex: "R$ 1.200,00" ou 1200.00)
+        const parseMoney = (val) => {
+          if (typeof val === 'number') return val;
+          if (!val) return 0;
+          // Se for string, remove R$ e converte
+          let clean = val.toString().replace('R$', '').trim();
+          // Se tiver vírgula e ponto, assume formato BR (1.000,00) -> 1000.00
+          if (clean.includes(',') && clean.includes('.')) {
+             clean = clean.replace(/\./g, '').replace(',', '.');
+          } else if (clean.includes(',')) {
+             clean = clean.replace(',', '.');
+          }
+          return parseFloat(clean) || 0;
+        };
+
+        const salePrice = parseMoney(row[idxPrice]);
+        
+        // Soma todas as taxas da Shopee que estiverem disponíveis na linha
+        let totalShopeeFees = 0;
+        if (idxFeeComissao !== -1) totalShopeeFees += parseMoney(row[idxFeeComissao]);
+        if (idxFeeServico !== -1) totalShopeeFees += parseMoney(row[idxFeeServico]);
+        if (idxFeeTransacao !== -1) totalShopeeFees += parseMoney(row[idxFeeTransacao]);
+
+        // Se por acaso as taxas vierem zeradas na planilha (ex: pedido novo), estima 20%
+        if (totalShopeeFees === 0 && salePrice > 0) {
+           totalShopeeFees = salePrice * 0.20; 
         }
-        
-        const salePrice = parseFloat(rawPrice || 0);
-        
+
         return {
-          id: index, // ID temporário
+          id: index,
           order_id: row[idxId],
-          product_name: row[idxProd] || 'Produto Shopee',
+          product_name: row[idxProd],
           sale_price: salePrice,
-          product_cost: 0, // Custo deve ser preenchido pelo usuário
-          shopee_fee: salePrice * 0.20, // Estimativa 20% (Taxa + Comissao)
-          fixed_fee: 3.00 // Taxa fixa padrão
+          product_cost: 0, // Usuário preenche
+          shopee_fee: totalShopeeFees, 
+          fixed_fee: 0 // Já somamos tudo no shopee_fee para ser exato
         };
       }).filter(Boolean);
 
@@ -154,7 +182,7 @@ export default function App() {
     }
   };
 
-  // --- 4. Métricas e Ações Manuais ---
+  // --- 4. Métricas e Ações ---
   const metrics = useMemo(() => {
     const totalGross = orders.reduce((acc, o) => acc + (o.sale_price || 0), 0);
     const totalCogs = orders.reduce((acc, o) => acc + (o.product_cost || 0), 0);
@@ -210,7 +238,7 @@ export default function App() {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <KpiCard title="Faturamento" value={metrics.totalGross} color="text-slate-800" icon={<DollarSign size={20}/>} />
           <KpiCard title="Custo Mercadoria" value={metrics.totalCogs} color="text-red-500" icon={<Calculator size={20}/>} />
-          <KpiCard title="Taxas Totais" value={metrics.totalFees} color="text-orange-500" icon={<AlertCircle size={20}/>} />
+          <KpiCard title="Taxas Shopee" value={metrics.totalFees} color="text-orange-500" icon={<AlertCircle size={20}/>} />
           <KpiCard title="Lucro Líquido" value={metrics.totalProfit} color="text-emerald-600" icon={<TrendingUp size={20}/>} highlight sub={`Margem: ${metrics.margin.toFixed(1)}%`} />
         </div>
 
@@ -228,6 +256,7 @@ export default function App() {
                   <tr className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-50">
                     <th className="pb-4 pl-4">Pedido</th>
                     <th className="pb-4 text-right">Venda</th>
+                    <th className="pb-4 text-right">Taxas</th>
                     <th className="pb-4 text-right">Lucro</th>
                     <th className="pb-4 text-center">Ação</th>
                   </tr>
@@ -242,6 +271,7 @@ export default function App() {
                           <div className="text-[10px] text-slate-400 truncate max-w-[150px] font-bold uppercase">{o.product_name}</div>
                         </td>
                         <td className="py-4 text-right font-bold text-slate-600">R$ {o.sale_price.toFixed(2)}</td>
+                        <td className="py-4 text-right text-xs text-orange-500 font-bold">- R$ {(o.shopee_fee + o.fixed_fee).toFixed(2)}</td>
                         <td className={`py-4 text-right font-black ${profit > 0 ? 'text-emerald-500' : 'text-red-500'}`}>
                           R$ {profit.toFixed(2)}
                         </td>
@@ -275,7 +305,7 @@ export default function App() {
                 <h4 className="font-black text-sm uppercase tracking-widest">Performance</h4>
               </div>
               <p className="text-slate-400 text-xs leading-relaxed mb-4 font-medium">
-                Mantenha sua margem acima de 20% para cobrir custos operacionais não listados.
+                Sua margem ideal deve ser acima de 20%. Ajuste seus custos se necessário.
               </p>
               <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
                 <div className="bg-emerald-500 h-full transition-all duration-1000" style={{ width: `${Math.min(metrics.margin * 2, 100)}%` }}></div>
@@ -292,7 +322,7 @@ export default function App() {
             <div className="bg-emerald-600 p-6 text-white flex justify-between items-center">
               <div>
                 <h3 className="text-xl font-black italic flex items-center gap-2"><Upload/> IMPORTAR SHOPEE</h3>
-                <p className="text-emerald-100 text-xs font-bold mt-1 uppercase tracking-widest">Suporta Planilha de Pedidos (.xlsx)</p>
+                <p className="text-emerald-100 text-xs font-bold mt-1 uppercase tracking-widest">Leitura automática de taxas</p>
               </div>
               <button onClick={() => {setShowUploadModal(false); setImportedData([]);}} className="hover:bg-emerald-500 p-2 rounded-lg transition-colors"><X/></button>
             </div>
@@ -306,7 +336,7 @@ export default function App() {
                   <input type="file" hidden ref={fileInputRef} accept=".xlsx, .xls, .csv" onChange={handleFileUpload} />
                   <div className="bg-slate-100 p-4 rounded-full mb-4 group-hover:scale-110 transition-transform"><FileText size={40} className="text-slate-400 group-hover:text-emerald-500" /></div>
                   <h4 className="text-lg font-black text-slate-700">Clique para selecionar</h4>
-                  <p className="text-slate-400 text-sm mt-1 font-medium">Arraste seu relatório de vendas aqui</p>
+                  <p className="text-slate-400 text-sm mt-1 font-medium">Use a planilha "Meus Pedidos" da Shopee</p>
                 </div>
               ) : (
                 <div className="space-y-6">
@@ -315,12 +345,12 @@ export default function App() {
                     <div className="flex gap-4">
                       <div className="bg-yellow-100 p-3 rounded-xl h-fit"><AlertCircle className="text-yellow-600" /></div>
                       <div>
-                        <h4 className="font-black text-yellow-800 text-sm uppercase">Custo da Mercadoria (CMV)</h4>
-                        <p className="text-yellow-700 text-xs mt-1">A Shopee não informa seu custo. Defina um valor padrão para preencher tudo:</p>
+                        <h4 className="font-black text-yellow-800 text-sm uppercase">Definir Custo do Produto (CMV)</h4>
+                        <p className="text-yellow-700 text-xs mt-1">Preencha um custo padrão para aplicar a todos, ou edite linha por linha.</p>
                       </div>
                     </div>
                     <div className="flex items-center gap-2 bg-white p-2 rounded-xl border border-yellow-200 shadow-sm">
-                      <span className="font-bold text-slate-400 text-xs uppercase pl-2">Padrão R$</span>
+                      <span className="font-bold text-slate-400 text-xs uppercase pl-2">R$</span>
                       <input 
                         type="number" 
                         value={defaultCost} 
@@ -342,8 +372,9 @@ export default function App() {
                           <th className="p-4">Pedido</th>
                           <th className="p-4">Produto</th>
                           <th className="p-4 text-right">Venda</th>
-                          <th className="p-4 text-right text-red-400">Custo (Editável)</th>
-                          <th className="p-4 text-right">Lucro Est.</th>
+                          <th className="p-4 text-right text-orange-500">Taxas</th>
+                          <th className="p-4 text-right text-red-400">Custo</th>
+                          <th className="p-4 text-right">Lucro</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-50">
@@ -352,6 +383,7 @@ export default function App() {
                             <td className="p-4 font-mono font-bold text-slate-600">{row.order_id}</td>
                             <td className="p-4 truncate max-w-[150px] font-medium">{row.product_name}</td>
                             <td className="p-4 text-right font-bold">R$ {row.sale_price.toFixed(2)}</td>
+                            <td className="p-4 text-right text-orange-500 font-bold">- R$ {row.shopee_fee.toFixed(2)}</td>
                             <td className="p-4 text-right">
                               <input 
                                 type="number" 
@@ -366,7 +398,7 @@ export default function App() {
                               />
                             </td>
                             <td className="p-4 text-right font-black text-emerald-600">
-                              R$ {(row.sale_price - row.product_cost - row.shopee_fee - row.fixed_fee).toFixed(2)}
+                              R$ {(row.sale_price - row.product_cost - row.shopee_fee).toFixed(2)}
                             </td>
                           </tr>
                         ))}
@@ -412,7 +444,7 @@ export default function App() {
                 product_name: fd.get('product_name'),
                 sale_price: sale,
                 product_cost: parseFloat(fd.get('product_cost')),
-                shopee_fee: sale * 0.20, 
+                shopee_fee: sale * 0.20, // Estimativa manual
                 fixed_fee: 3.00
               }]);
               if(!error) setShowModal(false);
