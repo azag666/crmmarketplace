@@ -488,8 +488,8 @@ export default function ProductAnalytics({ userId }) {
               
               <div className="bg-gray-50 p-3 rounded text-sm">
                 <p className="text-gray-600">
-                  <strong>Custo atual:</strong> {formatMoney(editingProduct.totalCost / editingProduct.orderCount)}<br/>
-                  <strong>Margem atual:</strong> {formatPercent(editingProduct.avgMargin)}
+                  <strong>Custo atual:</strong> {formatMoney(editingProduct.orderCount > 0 ? editingProduct.totalCost / editingProduct.orderCount : 0)}<br/>
+                  <strong>Margem atual:</strong> {formatPercent(editingProduct.avgMargin || 0)}
                 </p>
               </div>
             </div>

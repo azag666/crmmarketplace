@@ -95,6 +95,7 @@ CREATE TABLE IF NOT EXISTS orders (
     service_fee DECIMAL(10,2) DEFAULT 0.00, -- Taxa de serviço bruta
     transaction_fee DECIMAL(10,2) DEFAULT 0.00, -- Taxa de transação
     seller_voucher DECIMAL(10,2) DEFAULT 0.00, -- Cupom do vendedor
+    shopee_voucher DECIMAL(10,2) DEFAULT 0.00, -- Cupom Shopee (informativo)
     seller_coin_cashback DECIMAL(10,2) DEFAULT 0.00, -- Seller Absorbed Coin Cashback
     reverse_shipping_fee DECIMAL(10,2) DEFAULT 0.00, -- Taxa de Envio Reversa
     
@@ -109,7 +110,8 @@ CREATE TABLE IF NOT EXISTS orders (
     product_name TEXT,
     
     -- Dados Temporais (Precisão para Análise)
-    created_at_platform TIMESTAMP WITH TIME ZONE, -- Data de criação do pedido
+    creation_date TIMESTAMP WITH TIME ZONE, -- Data de criação do pedido (corrigido)
+    created_at_platform TIMESTAMP WITH TIME ZONE, -- Data de criação do pedido (legado)
     paid_at TIMESTAMP WITH TIME ZONE, -- Hora do pagamento do pedido
     imported_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,

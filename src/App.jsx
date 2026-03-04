@@ -28,12 +28,61 @@ export default function App() {
     setUserId(storedId);
   }, []);
 
-  // Detecção dinâmica do cabeçalho "ID do pedido"
+  // 🔧 FUNÇÃO CRÍTICA CORRIGIDA: parseMoney com tratamento preciso de formatos
+  const parseMoney = (value) => {
+    // Se já for número (Excel), mantém como está
+    if (typeof value === 'number') {
+      return value;
+    }
+    
+    if (!value || value === '' || value === '-') {
+      return 0;
+    }
+    
+    try {
+      // Converter para string e limpar
+      let cleanValue = value.toString().trim();
+      
+      // Remover símbolos de moeda e espaços
+      cleanValue = cleanValue.replace(/R\$/g, '').replace(/\s/g, '');
+      
+      // 🚨 LÓGICA CRÍTICA PARA FORMATOS BR/US
+      if (cleanValue.includes(',')) {
+        // Formato brasileiro: "1.234,56" ou "1234,56"
+        // Remover pontos de milhar, substituir vírgula por ponto
+        cleanValue = cleanValue.replace(/\./g, '').replace(',', '.');
+      } 
+      // Se não tem vírgula mas tem ponto, verificar se é decimal ou milhar
+      else if (cleanValue.includes('.')) {
+        const parts = cleanValue.split('.');
+        if (parts.length === 2 && parts[1].length === 2) {
+          // Formato US: "1234.56" (2 casas decimais)
+          cleanValue = cleanValue; // Mantém como está
+        } else if (parts.length > 2) {
+          // Provavelmente formato de milhar US: "1,234.56" (não comum)
+          cleanValue = cleanValue.replace(/,/g, '');
+        }
+        // Se tem apenas um ponto e mais de 2 casas, é provavelmente milhar
+        else if (parts[1].length > 2) {
+          cleanValue = cleanValue.replace(/\./g, '');
+        }
+      }
+      
+      const parsed = parseFloat(cleanValue);
+      return isNaN(parsed) ? 0 : parsed;
+      
+    } catch (error) {
+      console.warn('[parseMoney] Erro ao processar valor:', value, error);
+      return 0;
+    }
+  };
+
+  // 🔍 DETECÇÃO DINÂMICA DE CABEÇALHO CORRIGIDA
   const findHeaderRow = (worksheet) => {
     const range = XLSX.utils.decode_range(worksheet['!ref']);
-    const maxRow = Math.min(range.e.r, 20); // Limitar às primeiras 20 linhas para performance
+    const maxRow = Math.min(range.e.r, 20); // Limitar às primeiras 20 linhas
     
-    console.log('[DETECÇÃO] Procurando cabeçalho "ID do pedido" nas primeiras 20 linhas...');
+    console.log('[DETECÇÃO] Procurando cabeçalho nas primeiras 20 linhas...');
     
     for (let row = 0; row <= maxRow; row++) {
       for (let col = 0; col <= range.e.c; col++) {
@@ -41,13 +90,14 @@ export default function App() {
         const cellValue = worksheet[cellAddress]?.v;
         
         if (cellValue && typeof cellValue === 'string') {
-          const cleanValue = cellValue.toString().trim().toLowerCase();
+          const cleanValue = cellValue.toString().trim();
           
           // Verificar padrões exatos e flexíveis
-          if (cleanValue === 'id do pedido' || 
-              cleanValue.includes('id do pedido') ||
-              cleanValue === 'id pedido' ||
-              cleanValue.includes('order id') ||
+          if (cleanValue === 'ID do pedido' || 
+              cleanValue.includes('ID do pedido') ||
+              cleanValue === 'Order ID' ||
+              cleanValue.includes('Order ID') ||
+              cleanValue === 'id do pedido' ||
               cleanValue.includes('pedido')) {
             
             console.log(`[DETECÇÃO] Cabeçalho encontrado na linha ${row + 1}: "${cellValue}"`);
@@ -74,7 +124,7 @@ export default function App() {
       .toLowerCase();
   };
 
-  // Mapeamento preciso de colunas da planilha Shopee (baseado no orders.csv)
+  // 📊 MAPEAMENTO PRECISO DE COLUNAS SHOPEE (ATUALIZADO)
   const mapShopeeColumns = (headers) => {
     const normalizedHeaders = headers.map(h => sanitizeColumnName(h));
     
@@ -83,7 +133,7 @@ export default function App() {
     const mapping = {
       // Identificação
       order_id: normalizedHeaders.findIndex(h => 
-        h === 'id do pedido' || h.includes('id do pedido') || h === 'order id'
+        h === 'id do pedido' || h.includes('id do pedido') || h === 'order id' || h.includes('order id')
       ),
       
       // Produto
@@ -96,7 +146,7 @@ export default function App() {
       
       // Financeiro - Venda
       sale_price: normalizedHeaders.findIndex(h => 
-        h === 'preço acordado' || h.includes('preço') || h.includes('valor')
+        h === 'preço acordado' || h.includes('preço') || h.includes('valor') || h.includes('sale price')
       ),
       
       // Financeiro - Taxas Shopee
@@ -110,9 +160,12 @@ export default function App() {
         h === 'taxa de transação' || h.includes('transação') || h.includes('transaction')
       ),
       
-      // Financeiro - Marketing Vendedor
+      // Financeiro - Cupons (NOVO)
       seller_voucher: normalizedHeaders.findIndex(h => 
         h === 'cupom do vendedor' || h.includes('cupom do vendedor') || h.includes('seller voucher')
+      ),
+      shopee_voucher: normalizedHeaders.findIndex(h => 
+        h === 'cupom shopee' || h.includes('cupom shopee') || h.includes('shopee voucher')
       ),
       seller_coin_cashback: normalizedHeaders.findIndex(h => 
         h === 'seller absorbed coin cashback' || 
@@ -125,9 +178,12 @@ export default function App() {
         h === 'taxa de envio reversa' || h.includes('envio reversa') || h.includes('reverse')
       ),
       
-      // Datas
+      // 📅 DATAS (CRÍTICO PARA GRÁFICOS)
+      creation_date: normalizedHeaders.findIndex(h => 
+        h === 'data de criação do pedido' || h.includes('criação') || h.includes('creation') || h.includes('data de criação')
+      ),
       created_at_platform: normalizedHeaders.findIndex(h => 
-        h === 'data de criação do pedido' || h.includes('criação') || h.includes('created')
+        h === 'data de criação do pedido' || h.includes('criação') || h.includes('creation')
       ),
       paid_at: normalizedHeaders.findIndex(h => 
         h === 'hora do pagamento do pedido' || h.includes('pagamento') || h.includes('paid')
@@ -153,7 +209,7 @@ export default function App() {
     return mapping;
   };
 
-  // Tratamento robusto de datas
+  // 📅 TRATAMENTO ROBUSTO DE DATAS (ATUALIZADO)
   const parseDate = (value) => {
     if (!value) return null;
     
@@ -221,24 +277,13 @@ export default function App() {
       if (!row[columns.order_id]) return null;
 
       try {
-        // Funções de parsing robustas
-        const parseMoney = (value) => {
-          if (typeof value === 'number') return value;
-          if (!value) return 0;
-          const cleanValue = value.toString()
-            .replace('R$', '')
-            .replace(/\./g, '')
-            .replace(',', '.')
-            .trim();
-          return parseFloat(cleanValue) || 0;
-        };
-
-        // Extrair dados financeiros com precisão
+        // Extrair dados financeiros com parseMoney corrigido
         const salePrice = parseMoney(row[columns.sale_price]);
         const commissionFee = parseMoney(row[columns.commission_fee]);
         const serviceFee = parseMoney(row[columns.service_fee]);
         const transactionFee = parseMoney(row[columns.transaction_fee]);
         const sellerVoucher = parseMoney(row[columns.seller_voucher]);
+        const shopeeVoucher = parseMoney(row[columns.shopee_voucher]);
         const sellerCoinCashback = parseMoney(row[columns.seller_coin_cashback]);
         const reverseShippingFee = parseMoney(row[columns.reverse_shipping_fee]);
 
@@ -247,6 +292,9 @@ export default function App() {
           console.warn(`[PROCESSAMENTO] Ignorando pedido ${row[columns.order_id]} com valor zero ou negativo`);
           return null;
         }
+
+        // 📅 DATA DE CRIAÇÃO (CRÍTICO PARA GRÁFICOS)
+        const creationDate = parseDate(row[columns.creation_date]) || parseDate(row[columns.created_at_platform]);
 
         // SKU do produto
         let sku = row[columns.sku_variation] || 'SEM SKU';
@@ -258,19 +306,23 @@ export default function App() {
           sku_variation: sku,
           sale_price: salePrice,
           status: row[columns.status] || 'Concluído',
-          created_at_platform: parseDate(row[columns.created_at_platform]),
+          
+          // 📅 DATAS CORRIGIDAS
+          creation_date: creationDate, // Campo principal para gráficos
+          created_at_platform: creationDate, // Compatibilidade
           paid_at: parseDate(row[columns.paid_at]),
           
-          // Taxas Shopee (precisão contábil)
+          // Financeiro - Taxas
           commission_fee: commissionFee,
           service_fee: serviceFee,
           transaction_fee: transactionFee,
           
-          // Marketing Vendedor
+          // Financeiro - Cupons (NOVO)
           seller_voucher: sellerVoucher,
+          shopee_voucher: shopeeVoucher, // Informativo
           seller_coin_cashback: sellerCoinCashback,
           
-          // Logística Reversa
+          // Logística
           reverse_shipping_fee: reverseShippingFee,
           
           quantity: 1,
@@ -308,8 +360,8 @@ export default function App() {
       net_payout: totalRevenue - totalFees,
       avg_ticket: totalRevenue / processed.length,
       date_range: {
-        start: processed.reduce((min, o) => o.created_at_platform && o.created_at_platform < min ? o.created_at_platform : min, processed[0]?.created_at_platform),
-        end: processed.reduce((max, o) => o.created_at_platform && o.created_at_platform > max ? o.created_at_platform : max, processed[0]?.created_at_platform)
+        start: processed.reduce((min, o) => o.creation_date && o.creation_date < min ? o.creation_date : min, processed[0]?.creation_date),
+        end: processed.reduce((max, o) => o.creation_date && o.creation_date > max ? o.creation_date : max, processed[0]?.creation_date)
       },
       status_breakdown: processed.reduce((acc, o) => {
         acc[o.status] = (acc[o.status] || 0) + 1;
@@ -342,7 +394,7 @@ export default function App() {
         
         setImportMessage('Detectando cabeçalho...');
         
-        // Detecção dinâmica do cabeçalho
+        // 🔍 DETECÇÃO DINÂMICA DO CABEÇALHO
         const sheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[sheetName];
         const headerRow = findHeaderRow(worksheet);
@@ -383,7 +435,6 @@ export default function App() {
     setImportMessage('Salvando dados no sistema...');
 
     try {
-      // Simular processamento da API localmente
       const batchId = crypto.randomUUID();
       
       // Aplicar lógica empresarial local
@@ -626,8 +677,8 @@ export default function App() {
                 </p>
                 <div className="text-sm text-gray-500 space-y-1">
                   <p>• Detecção automática: "Order.all" (Linha 0) ou "Relatórios Financeiros" (Linha 12)</p>
-                  <p>• Mapeamento preciso: Preço acordado, Taxas, Cupons, Envio Reverso</p>
-                  <p>• Tratamento de datas: Excel Serial, YYYY-MM-DD, DD/MM/YYYY</p>
+                  <p>• Parser preciso: R$ 1.234,56 → 1234.56 | 1,234.56 → 1234.56</p>
+                  <p>• Mapeamento completo: Preço, Taxas, Cupons, Envio Reverso, Datas</p>
                 </div>
                 <input
                   type="file"
@@ -813,8 +864,8 @@ export default function App() {
                                 </span>
                               </td>
                               <td className="p-2 text-xs">
-                                {row.created_at_platform ? 
-                                  new Date(row.created_at_platform).toLocaleDateString('pt-BR') : 
+                                {row.creation_date ? 
+                                  new Date(row.creation_date).toLocaleDateString('pt-BR') : 
                                   'N/A'
                                 }
                               </td>

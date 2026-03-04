@@ -222,7 +222,11 @@ export default function FinancialDetective({ userId }) {
                 <th className="text-left p-3 font-medium text-gray-900">Pedido</th>
                 <th className="text-left p-3 font-medium text-gray-900">Produto</th>
                 <th className="text-right p-3 font-medium text-gray-900">Valor</th>
-                <th className="text-right p-3 font-medium text-gray-900">Taxas</th>
+                <th className="text-right p-3 font-medium text-gray-900">Comissão</th>
+                <th className="text-right p-3 font-medium text-gray-900">Cupom Vendedor</th>
+                <th className="text-right p-3 font-medium text-gray-900">Cupom Shopee</th>
+                <th className="text-right p-3 font-medium text-gray-900">Moedas</th>
+                <th className="text-right p-3 font-medium text-gray-900">Envio Reverso</th>
                 <th className="text-right p-3 font-medium text-gray-900">Custo</th>
                 <th className="text-right p-3 font-medium text-gray-900">Lucro</th>
                 <th className="text-right p-3 font-medium text-gray-900">Margem</th>
@@ -232,23 +236,31 @@ export default function FinancialDetective({ userId }) {
             <tbody className="divide-y divide-gray-200">
               {loading ? (
                 <tr>
-                  <td colSpan="8" className="text-center p-8">
+                  <td colSpan="12" className="text-center p-8">
                     <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-orange-500 mx-auto"></div>
                     <p className="mt-2 text-gray-600">Carregando pedidos...</p>
                   </td>
                 </tr>
               ) : filteredOrders.length === 0 ? (
                 <tr>
-                  <td colSpan="8" className="text-center p-8 text-gray-500">
+                  <td colSpan="12" className="text-center p-8 text-gray-500">
                     Nenhum pedido encontrado com os filtros selecionados
                   </td>
                 </tr>
               ) : (
                 filteredOrders.map((order, idx) => {
-                  const totalFees = (order.shopee_fee || 0) + (order.seller_voucher || 0) + 
-                                   (order.shopee_voucher || 0) + (order.coins_cashback || 0) +
-                                   (order.reverse_shipping_fee || 0) + (order.fixed_fee || 0);
-                  const profit = order.individual_profit || 0;
+                  // 📊 CÁLCULO CORRIGIDO COM TODAS AS TAXAS
+                  const commissionFee = order.commission_fee || 0;
+                  const serviceFee = order.service_fee || 0;
+                  const transactionFee = order.transaction_fee || 0;
+                  const sellerVoucher = order.seller_voucher || 0;
+                  const shopeeVoucher = order.shopee_voucher || 0; // Informativo
+                  const sellerCoinCashback = order.seller_coin_cashback || 0;
+                  const reverseShippingFee = order.reverse_shipping_fee || 0;
+                  
+                  const totalFees = commissionFee + serviceFee + transactionFee + 
+                                   sellerVoucher + sellerCoinCashback + reverseShippingFee;
+                  const profit = order.net_profit || order.individual_profit || 0;
                   const margin = order.sale_price > 0 ? (profit / order.sale_price) * 100 : 0;
                   
                   return (
@@ -263,7 +275,11 @@ export default function FinancialDetective({ userId }) {
                         </div>
                       </td>
                       <td className="p-3 text-right font-medium">{formatMoney(order.sale_price)}</td>
-                      <td className="p-3 text-right text-red-600">{formatMoney(totalFees)}</td>
+                      <td className="p-3 text-right text-red-600">{formatMoney(commissionFee)}</td>
+                      <td className="p-3 text-right text-orange-600">{formatMoney(sellerVoucher)}</td>
+                      <td className="p-3 text-right text-blue-600">{formatMoney(shopeeVoucher)}</td>
+                      <td className="p-3 text-right text-purple-600">{formatMoney(sellerCoinCashback)}</td>
+                      <td className="p-3 text-right text-pink-600">{formatMoney(reverseShippingFee)}</td>
                       <td className="p-3 text-right text-orange-600">{formatMoney(order.product_cost || 0)}</td>
                       <td className={`p-3 text-right font-medium ${
                         profit >= 0 ? 'text-green-600' : 'text-red-600'
