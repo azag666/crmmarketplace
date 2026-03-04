@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import Dashboard from './pages/Dashboard';
 import FinancialDetective from './components/FinancialDetective';
 import ProductAnalytics from './components/ProductAnalytics';
-import { Upload, X, Package, Search, TrendingUp, AlertCircle, CheckCircle, Calendar, Filter } from 'lucide-react';
+import { Upload, X, Package, Search, TrendingUp, AlertCircle, CheckCircle, Calendar, Filter, Plus, List } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart, Bar } from 'recharts';
 
@@ -437,19 +437,36 @@ export default function App() {
     try {
       const batchId = crypto.randomUUID();
       
-      // Aplicar lógica empresarial local
+      // 🔍 BUSCAR CUSTOS JÁ CADASTRADOS
+      const existingProducts = JSON.parse(localStorage.getItem(`shopeeflow_products_${userId}`) || '[]');
+      const productCosts = {};
+      
+      // Criar mapa de custos por SKU
+      existingProducts.forEach(product => {
+        productCosts[product.sku] = product.current_cost || 0;
+      });
+      
+      console.log('[CUSTOS] Mapa de custos existentes:', productCosts);
+      
+      // Aplicar lógica empresarial local com custos existentes
       const processedOrders = processedData.map(order => {
+        // 🔥 USAR CUSTO JÁ CADASTRADO ou PADRÃO
+        const existingCost = productCosts[order.sku_variation] || 0;
+        const productCost = existingCost > 0 ? existingCost : (order.product_cost || 0);
+        
+        console.log(`[CUSTO] SKU ${order.sku_variation}: usando R$ ${productCost} (existente: R$ ${existingCost})`);
+        
         // Calcular taxas totais
         const totalFees = (order.commission_fee || 0) + (order.service_fee || 0) + 
                          (order.transaction_fee || 0) + (order.seller_voucher || 0) +
                          (order.seller_coin_cashback || 0) + (order.reverse_shipping_fee || 0);
         
         // Calcular lucro bruto
-        const grossProfit = order.sale_price - totalFees - (order.product_cost || 0);
+        const grossProfit = order.sale_price - totalFees - productCost;
         
         // Aplicar regras empresariais
         let netProfit = grossProfit;
-        let processingNotes = 'Venda normal';
+        let processingNotes = existingCost > 0 ? 'Venda normal (custo existente)' : 'Venda normal (custo padrão)';
         
         if (order.status === 'Cancelado') {
           if (order.reverse_shipping_fee > 0 || totalFees > 0) {
@@ -460,12 +477,13 @@ export default function App() {
             processingNotes = 'Cancelado sem custos';
           }
         } else if (order.status === 'Devolução/Reembolso') {
-          netProfit = -((order.product_cost || 0) + order.reverse_shipping_fee + totalFees);
+          netProfit = -(productCost + order.reverse_shipping_fee + totalFees);
           processingNotes = 'Devolução/Reembolso - prejuízo total';
         }
         
         return {
           ...order,
+          product_cost: productCost, // Usar custo existente
           total_fees: totalFees,
           gross_profit: grossProfit,
           net_profit: netProfit,
@@ -488,6 +506,12 @@ export default function App() {
       
       localStorage.setItem(`shopeeflow_orders_${userId}`, JSON.stringify(allData));
       
+      // 📊 ESTATÍSTICAS DE CUSTOS USADOS
+      const usedExistingCosts = newOrders.filter(o => productCosts[o.sku_variation] > 0).length;
+      const usedDefaultCosts = newOrders.filter(o => productCosts[o.sku_variation] === 0).length;
+      
+      console.log(`[CUSTOS] ${usedExistingCosts} pedidos com custos existentes, ${usedDefaultCosts} com custos padrão`);
+      
       // Simular resposta da API
       const result = {
         success: true,
@@ -496,7 +520,11 @@ export default function App() {
           successful: newOrders.length,
           failed: 0,
           duplicates: duplicateCount,
-          errors: []
+          errors: [],
+          cost_stats: {
+            used_existing_costs: usedExistingCosts,
+            used_default_costs: usedDefaultCosts
+          }
         },
         processed_orders: newOrders
       };
@@ -506,6 +534,10 @@ export default function App() {
       
       if (result.summary.duplicates > 0) {
         setImportMessage(prev => prev + ` ℹ️ ${result.summary.duplicates} pedidos duplicados ignorados.`);
+      }
+      
+      if (result.summary.cost_stats.used_existing_costs > 0) {
+        setImportMessage(prev => prev + ` 💰 ${result.summary.cost_stats.used_existing_costs} pedidos usaram custos cadastrados.`);
       }
 
       setImportSummary(result.summary);
@@ -527,6 +559,79 @@ export default function App() {
       setImportMessage(`❌ Erro na importação: ${error.message}`);
       setIsProcessing(false);
     }
+  };
+
+  // 🛒 FUNÇÃO PARA CADASTRAR PRODUTOS COM CUSTOS
+  const handleAddProduct = () => {
+    const sku = prompt('Digite o SKU do produto:');
+    if (!sku) return;
+    
+    const name = prompt('Digite o nome do produto:');
+    if (!name) return;
+    
+    const cost = prompt('Digite o custo do produto (ex: 50.00):');
+    if (!cost) return;
+    
+    try {
+      const parsedCost = parseFloat(cost.replace(',', '.'));
+      if (isNaN(parsedCost) || parsedCost < 0) {
+        alert('Custo inválido. Digite um número positivo.');
+        return;
+      }
+      
+      // Buscar produtos existentes
+      const existingProducts = JSON.parse(localStorage.getItem(`shopeeflow_products_${userId}`) || '[]');
+      
+      // Verificar se SKU já existe
+      const existingProduct = existingProducts.find(p => p.sku === sku.toUpperCase());
+      if (existingProduct) {
+        // Atualizar custo do produto existente
+        existingProduct.current_cost = parsedCost;
+        existingProduct.updated_at = new Date().toISOString();
+        
+        alert(`Produto ${sku} atualizado! Custo: R$ ${parsedCost.toFixed(2)}`);
+      } else {
+        // Adicionar novo produto
+        const newProduct = {
+          sku: sku.toUpperCase(),
+          name: name,
+          current_cost: parsedCost,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        };
+        
+        existingProducts.push(newProduct);
+        alert(`Produto ${sku} cadastrado! Custo: R$ ${parsedCost.toFixed(2)}`);
+      }
+      
+      // Salvar no localStorage
+      localStorage.setItem(`shopeeflow_products_${userId}`, JSON.stringify(existingProducts));
+      
+      console.log('[PRODUTO] Produto salvo:', { sku: sku.toUpperCase(), name, cost: parsedCost });
+      
+    } catch (error) {
+      console.error('[PRODUTO] Erro ao salvar produto:', error);
+      alert('Erro ao salvar produto. Tente novamente.');
+    }
+  };
+
+  // 📋 FUNÇÃO PARA LISTAR PRODUTOS CADASTRADOS
+  const handleListProducts = () => {
+    const existingProducts = JSON.parse(localStorage.getItem(`shopeeflow_products_${userId}`) || '[]');
+    
+    if (existingProducts.length === 0) {
+      alert('Nenhum produto cadastrado ainda.\n\nUse "Cadastrar Produto" para adicionar custos aos seus produtos.');
+      return;
+    }
+    
+    let productList = '📋 PRODUTOS CADASTRADOS:\n\n';
+    productList += existingProducts.map((p, index) => 
+      `${index + 1}. ${p.sku} - ${p.name}\n   💰 Custo: R$ ${p.current_cost?.toFixed(2) || '0.00'}\n`
+    ).join('\n');
+    
+    productList += `\nTotal: ${existingProducts.length} produtos cadastrados`;
+    
+    alert(productList);
   };
 
   // Limpar dados locais
@@ -575,6 +680,24 @@ export default function App() {
               >
                 <Upload size={16} />
                 Importar Dados
+              </button>
+              
+              <button 
+                onClick={handleAddProduct}
+                className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors"
+                title="Cadastrar produto com custo"
+              >
+                <Plus size={16} />
+                Cadastrar Produto
+              </button>
+              
+              <button 
+                onClick={handleListProducts}
+                className="bg-purple-500 hover:bg-purple-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors"
+                title="Listar produtos cadastrados"
+              >
+                <List size={16} />
+                Ver Produtos
               </button>
               
               <button 
