@@ -1,47 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { QueryProvider } from './components/QueryProvider';
 import Dashboard from './pages/Dashboard';
-import { Upload, X, Package, Search, TrendingUp, Settings } from 'lucide-react';
-import { Button } from './components/ui/Button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './components/ui/Card';
-import { useImportOrders, useClearData } from './hooks/useOrders';
-import * as XLSX from 'xlsx';
-
-// PRESET_COSTS do sistema original
-const PRESET_COSTS = {
-  "ESTANTE4PRATBANCO": 36.03, "ESTANTE5PRAT": 40.92, "DECK40X40CM3UN": 27.18, 
-  "ESTANTESANITA4PRAT": 16.18, "ESTANTE3PRAT65X302UN": 39.00, "3UNIPALLET50X50CM": 37.20,
-  "ESTANTE3CRUA": 18.85, "DECK30X30": 5.59, "DECK40X40CM4UN": 36.24, "ESTANTE65CM2UN": 49.42,
-  "ESTANTE2PRAT": 16.27, "GABINETEBANHEIRO": 22.96, "ESTANTE3PRAT2UN": 37.70,
-  "ESTRADO25X25CM": 3.55, "CAPABOTIJÃO": 59.79, "PALLET": 12.40, "ESTANTE4PRAT": 34.88,
-  "SAPATEIROBANCO": 40.93, "2UNIESTANTE65X50CM": 49.42, "PALLET40X40CM": 10.10,
-  "2UNIESTANTE3CRUA": 37.70, "10UNIDECK30X30CM": 55.90, "DECK30X30CM": 5.59,
-  "02UNIESTANTE65X50": 49.42, "SUPPLANTA": 2.74, "ESTANTE5PRAT100X50X30": 40.92,
-  "SUPPLANTA5UNI": 13.10, "DECK30X30CM3UN": 16.77, "PALLET50X50CM": 12.40,
-  "DECK30X30CM2UN": 11.18, "PRATELEIRAVASOS70X50CM": 38.94, "ESTANTE3CRUAFECHADA": 25.62,
-  "ESTANTE65X30X30": 19.50, "CAVALETE70CM2UNI": 21.84, "02UNIPALLET50X50": 24.80,
-  "25UNIRIPA40CM": 19.75, "ARARAINFANTIL": 21.93, "ESTANTE3PRAT": 18.85,
-  "SUPPLANTA4UNI": 10.96, "4UNIDECK30X30CM": 22.36, "ESTRADO25X25CM4UNI": 14.20,
-  "02UNICAVALETE70CM": 21.84, "CAVALETE70CM": 10.92, "SUPPLANTA2UNI": 5.48,
-  "ARARAINFATIL": 21.93, "SUPPLANTA2UN": 5.48, "ESTANTE65CM": 24.71,
-  "BARALHOCOPAGKITGABINETE+ESTANTESANITARI1PRAT": 39.14, "SUPPLANTA3UNI": 8.22,
-  "DECK40X40CM2UN": 18.12, "100litros006": 20.00, "ESTANTE65X50CM": 24.71,
-  "ESTANTE3PRAT65X30": 19.50, "TABUA20X60CM": 0.00, "ESTANTE65X50X30": 24.71,
-  "02UNICAVALETE80CM": 21.84, "DECK40X40CM": 9.06, "SUPARANDELA": 1.76,
-  "DECK30X30CM4UN": 22.36, "ESTANTESANITA1PRAT": 16.78, "03UNICAVALETE70CM": 32.76
-};
 
 export default function App() {
   const [userId, setUserId] = useState(null);
   const [activeTab, setActiveTab] = useState('dashboard');
-  const [showUploadModal, setShowUploadModal] = useState(false);
-  const [importedData, setImportedData] = useState([]);
-  
-  // Hooks do TanStack Query
-  const importOrders = useImportOrders();
-  const clearData = useClearData();
 
-  // Autenticação simples
   useEffect(() => {
     let storedId = localStorage.getItem('shopeeflow_user_id');
     if (!storedId) {
@@ -51,356 +14,123 @@ export default function App() {
     setUserId(storedId);
   }, []);
 
-  // Processamento de importação (mantido do sistema original)
-  const processImportData = (data) => {
-    if (!data?.length) return;
-    const h = data[0].map(x => x?.toString().toLowerCase().trim());
-    
-    const cols = {
-      id: h.findIndex(x => x === 'id do pedido'),
-      prod: h.findIndex(x => x === 'nome do produto'),
-      skuVar: h.findIndex(x => x === 'número de referência sku'),
-      skuMain: h.findIndex(x => x === 'nº de referência do sku principal'),
-      price: h.findIndex(x => x === 'preço acordado'),
-      status: h.findIndex(x => x === 'status do pedido'),
-      created: h.findIndex(x => x === 'data de criação do pedido' || x === 'data de criação'),
-      
-      feeCom: h.findIndex(x => x.includes('comissão')),
-      feeServ: h.findIndex(x => x.includes('serviço')),
-      feeTrans: h.findIndex(x => x.includes('transação')),
-      
-      sellerVoucher: h.findIndex(x => x === 'cupom do vendedor'),
-      shopeeVoucher: h.findIndex(x => x === 'cupom shopee'),
-      coins: h.findIndex(x => x.includes('moedas') || x.includes('coin')),
-      reverseFee: h.findIndex(x => x.includes('envio reversa')),
-    };
-
-    if(cols.id === -1) return alert("Planilha inválida.");
-
-    const processed = data.slice(1).map(row => {
-      if(!row[cols.id]) return null;
-      
-      const parseVal = (v) => {
-        if(typeof v === 'number') return v;
-        if(!v) return 0;
-        return parseFloat(v.toString().replace('R$','').replace(/\./g,'').replace(',','.').trim()) || 0;
-      };
-      
-      const parseDate = (v) => {
-        if (!v) return null;
-        if (typeof v === 'number') {
-          return new Date(Math.round((v - 25569)*86400*1000)).toISOString();
-        }
-        let d = new Date(v);
-        if (!isNaN(d)) return d.toISOString();
-        return null;
-      };
-
-      let sku = row[cols.skuVar] || row[cols.skuMain] || row[cols.prod];
-      sku = sku ? sku.toString().trim().toUpperCase().replace(/\s/g, '') : 'SEM SKU';
-      
-      // Cálculo de custo individual por pedido
-      let cost = 0;
-      if (PRESET_COSTS[sku]) {
-        cost = PRESET_COSTS[sku];
-      } else {
-        const skuKeys = Object.keys(PRESET_COSTS);
-        const foundSku = skuKeys.find(key => 
-          key.includes(sku) || sku.includes(key) || 
-          key.replace(/\s/g, '').toUpperCase() === sku
-        );
-        cost = foundSku ? PRESET_COSTS[foundSku] : 0;
-      }
-      
-      let shopeeFees = 0;
-      if(cols.feeCom !== -1) shopeeFees += parseVal(row[cols.feeCom]);
-      if(cols.feeServ !== -1) shopeeFees += parseVal(row[cols.feeServ]);
-      if(cols.feeTrans !== -1) shopeeFees += parseVal(row[cols.feeTrans]);
-      
-      const sellerVoucher = cols.sellerVoucher !== -1 ? parseVal(row[cols.sellerVoucher]) : 0;
-      const shopeeVoucher = cols.shopeeVoucher !== -1 ? parseVal(row[cols.shopeeVoucher]) : 0;
-      const coins = cols.coins !== -1 ? parseVal(row[cols.coins]) : 0;
-      const reverseFee = cols.reverseFee !== -1 ? parseVal(row[cols.reverseFee]) : 0;
-      const sale = parseVal(row[cols.price]);
-      const status = row[cols.status] || 'Concluído';
-      
-      if(status.toLowerCase().includes('cancelado')) { 
-        shopeeFees = 0; 
-      } else if(shopeeFees === 0 && sale > 0) { 
-        shopeeFees = sale * 0.20; 
-      }
-      
-      const totalFees = Math.abs(shopeeFees) + Math.abs(sellerVoucher) + Math.abs(coins) + Math.abs(reverseFee);
-      const individualProfit = sale - cost - totalFees;
-      
-      const creationDate = parseDate(row[cols.created]);
-
-      return {
-        order_id: row[cols.id], 
-        product_name: row[cols.prod], 
-        sku: sku, 
-        sale_price: sale, 
-        product_cost: cost, 
-        shopee_fee: Math.abs(shopeeFees), 
-        fixed_fee: 3.00,
-        seller_voucher: Math.abs(sellerVoucher),
-        shopee_voucher: Math.abs(shopeeVoucher),
-        coins_cashback: Math.abs(coins),
-        reverse_shipping_fee: Math.abs(reverseFee),
-        status: status, 
-        creation_date: creationDate,
-        quantity: 1,
-        shipping_rebate: 0,
-        service_fee: 0,
-        transaction_fee: 0
-      };
-    }).filter(Boolean);
-    
-    setImportedData(processed);
-  };
-
-  const handleFileUpload = (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (evt) => {
-      const wb = XLSX.read(evt.target.result, { type: 'binary' });
-      const data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1 });
-      processImportData(data);
-    };
-    reader.readAsBinaryString(file);
-  };
-
-  const handleImport = () => {
-    if (!userId || importedData.length === 0) return;
-    
-    importOrders.mutate({
-      userId,
-      orders: importedData
-    }, {
-      onSuccess: () => {
-        alert('Dados importados com sucesso!');
-        setShowUploadModal(false);
-        setImportedData([]);
-      },
-      onError: (error) => {
-        alert('Erro ao importar dados: ' + error.message);
-      }
-    });
-  };
-
-  const handleClearData = () => {
-    if (!userId) return;
-    if (!confirm('Tem certeza que deseja apagar TODOS os dados? Esta ação não pode ser desfeita.')) return;
-    
-    clearData.mutate(userId, {
-      onSuccess: () => {
-        alert('Dados limpos com sucesso!');
-      },
-      onError: (error) => {
-        alert('Erro ao limpar dados: ' + error.message);
-      }
-    });
-  };
-
   if (!userId) {
     return (
-      <div className="flex items-center justify-center h-screen">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+      <div className="flex items-center justify-center h-screen bg-gray-50">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-orange-500 mx-auto"></div>
+          <p className="mt-4 text-gray-600">Carregando ShopeeFlow...</p>
+        </div>
       </div>
     );
   }
 
   return (
-    <QueryProvider>
-      <div className="min-h-screen bg-gray-50">
-        {/* Header */}
-        <header className="bg-white shadow-sm border-b">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="flex justify-between items-center py-4">
+    <div className="min-h-screen bg-gray-50">
+      {/* Header */}
+      <header className="bg-white shadow-sm border-b">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex justify-between items-center py-4">
+            <div className="flex items-center">
+              <div className="bg-orange-500 p-2 rounded-lg text-white mr-3">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+                </svg>
+              </div>
+              <h1 className="text-xl font-bold text-gray-900">
+                ShopeeFlow <span className="text-orange-500">PRO</span>
+              </h1>
+            </div>
+            
+            <div className="flex items-center gap-4">
+              <button className="bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                </svg>
+                Importar Dados
+              </button>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      {/* Navigation */}
+      <nav className="bg-white border-b">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex space-x-8">
+            <button
+              onClick={() => setActiveTab('dashboard')}
+              className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
+                activeTab === 'dashboard'
+                  ? 'border-orange-500 text-orange-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
               <div className="flex items-center">
-                <div className="bg-orange-500 p-2 rounded-lg text-white mr-3">
-                  <TrendingUp size={20} />
-                </div>
-                <h1 className="text-xl font-bold text-gray-900">
-                  ShopeeFlow <span className="text-orange-500">PRO</span>
-                </h1>
+                <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+                </svg>
+                Dashboard
               </div>
-              
-              <div className="flex items-center gap-4">
-                <Button onClick={() => setShowUploadModal(true)}>
-                  <Upload size={16} className="mr-2" />
-                  Importar Dados
-                </Button>
-                
-                <Button variant="outline" onClick={handleClearData}>
-                  Limpar Dados
-                </Button>
+            </button>
+            
+            <button
+              onClick={() => setActiveTab('products')}
+              className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
+                activeTab === 'products'
+                  ? 'border-orange-500 text-orange-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              <div className="flex items-center">
+                <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+                </svg>
+                Produtos
               </div>
-            </div>
+            </button>
+            
+            <button
+              onClick={() => setActiveTab('detective')}
+              className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
+                activeTab === 'detective'
+                  ? 'border-orange-500 text-orange-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              <div className="flex items-center">
+                <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+                Detetive
+              </div>
+            </button>
           </div>
-        </header>
+        </div>
+      </nav>
 
-        {/* Navigation */}
-        <nav className="bg-white border-b">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="flex space-x-8">
-              <button
-                onClick={() => setActiveTab('dashboard')}
-                className={`py-4 px-1 border-b-2 font-medium text-sm ${
-                  activeTab === 'dashboard'
-                    ? 'border-orange-500 text-orange-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                }`}
-              >
-                <div className="flex items-center">
-                  <TrendingUp size={16} className="mr-2" />
-                  Dashboard
-                </div>
-              </button>
-              
-              <button
-                onClick={() => setActiveTab('products')}
-                className={`py-4 px-1 border-b-2 font-medium text-sm ${
-                  activeTab === 'products'
-                    ? 'border-orange-500 text-orange-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                }`}
-              >
-                <div className="flex items-center">
-                  <Package size={16} className="mr-2" />
-                  Produtos
-                </div>
-              </button>
-              
-              <button
-                onClick={() => setActiveTab('detective')}
-                className={`py-4 px-1 border-b-2 font-medium text-sm ${
-                  activeTab === 'detective'
-                    ? 'border-orange-500 text-orange-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                }`}
-              >
-                <div className="flex items-center">
-                  <Search size={16} className="mr-2" />
-                  Detetive
-                </div>
-              </button>
-            </div>
-          </div>
-        </nav>
-
-        {/* Main Content */}
-        <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-          {activeTab === 'dashboard' && <Dashboard userId={userId} />}
-          {activeTab === 'products' && (
-            <div className="text-center py-12">
-              <Package className="mx-auto h-12 w-12 text-gray-400" />
-              <h3 className="mt-2 text-sm font-medium text-gray-900">Módulo de Produtos</h3>
-              <p className="mt-1 text-sm text-gray-500">Em desenvolvimento...</p>
-            </div>
-          )}
-          {activeTab === 'detective' && (
-            <div className="text-center py-12">
-              <Search className="mx-auto h-12 w-12 text-gray-400" />
-              <h3 className="mt-2 text-sm font-medium text-gray-900">Detetive Financeiro</h3>
-              <p className="mt-1 text-sm text-gray-500">Em desenvolvimento...</p>
-            </div>
-          )}
-        </main>
-
-        {/* Import Modal */}
-        {showUploadModal && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <Card className="w-full max-w-2xl mx-4">
-              <CardHeader>
-                <div className="flex justify-between items-center">
-                  <CardTitle>Importar Planilha de Vendas</CardTitle>
-                  <Button variant="ghost" size="sm" onClick={() => setShowUploadModal(false)}>
-                    <X size={16} />
-                  </Button>
-                </div>
-                <CardDescription>
-                  Selecione a planilha exportada da Shopee para importar os dados de vendas.
-                </CardDescription>
-              </CardHeader>
-              
-              <CardContent>
-                <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center">
-                  <Upload className="mx-auto h-12 w-12 text-gray-400 mb-4" />
-                  <p className="text-gray-600 mb-4">
-                    Arraste a planilha ou clique para selecionar
-                  </p>
-                  <input
-                    type="file"
-                    accept=".xlsx,.xls"
-                    onChange={handleFileUpload}
-                    className="hidden"
-                    id="file-upload"
-                  />
-                  <Button asChild>
-                    <label htmlFor="file-upload" className="cursor-pointer">
-                      Selecionar Arquivo
-                    </label>
-                  </Button>
-                </div>
-                
-                {importedData.length > 0 && (
-                  <div className="mt-6">
-                    <div className="flex justify-between items-center mb-4">
-                      <h4 className="font-medium">
-                        Pré-visualização ({importedData.length} registros)
-                      </h4>
-                      <div className="flex gap-2">
-                        <Button 
-                          variant="outline" 
-                          onClick={() => setImportedData([])}
-                        >
-                          Limpar
-                        </Button>
-                        <Button 
-                          onClick={handleImport}
-                          disabled={importOrders.isPending}
-                        >
-                          {importOrders.isPending ? 'Importando...' : 'Importar Dados'}
-                        </Button>
-                      </div>
-                    </div>
-                    
-                    <div className="bg-gray-50 rounded-lg p-4 max-h-60 overflow-y-auto">
-                      <table className="w-full text-sm">
-                        <thead className="border-b">
-                          <tr>
-                            <th className="text-left p-2">Pedido</th>
-                            <th className="text-left p-2">Produto</th>
-                            <th className="text-right p-2">Valor</th>
-                            <th className="text-right p-2">Custo</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {importedData.slice(0, 10).map((row, idx) => (
-                            <tr key={idx} className="border-b">
-                              <td className="p-2">{row.order_id}</td>
-                              <td className="p-2 truncate max-w-xs">{row.product_name}</td>
-                              <td className="p-2 text-right">R$ {row.sale_price.toFixed(2)}</td>
-                              <td className="p-2 text-right">R$ {row.product_cost.toFixed(2)}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                      {importedData.length > 10 && (
-                        <p className="text-center text-gray-500 mt-2">
-                          ... e mais {importedData.length - 10} registros
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+      {/* Main Content */}
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {activeTab === 'dashboard' && <Dashboard userId={userId} />}
+        {activeTab === 'products' && (
+          <div className="text-center py-12">
+            <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+            </svg>
+            <h3 className="mt-2 text-sm font-medium text-gray-900">Módulo de Produtos</h3>
+            <p className="mt-1 text-sm text-gray-500">Em desenvolvimento...</p>
           </div>
         )}
-      </div>
-    </QueryProvider>
+        {activeTab === 'detective' && (
+          <div className="text-center py-12">
+            <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+            <h3 className="mt-2 text-sm font-medium text-gray-900">Detetive Financeiro</h3>
+            <p className="mt-1 text-sm text-gray-500">Em desenvolvimento...</p>
+          </div>
+        )}
+      </main>
+    </div>
   );
 }
