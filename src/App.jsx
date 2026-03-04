@@ -371,7 +371,7 @@ export default function App() {
     reader.readAsBinaryString(file);
   };
 
-  // Importação para o backend
+  // Importação para o backend (versão local para desenvolvimento)
   const handleImport = async () => {
     if (processedData.length === 0) {
       alert('Nenhum dado para importar. Por favor, selecione uma planilha primeiro.');
@@ -383,50 +383,93 @@ export default function App() {
     setImportMessage('Salvando dados no sistema...');
 
     try {
+      // Simular processamento da API localmente
       const batchId = crypto.randomUUID();
       
-      const response = await fetch('/api/orders', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          userId: userId,
-          orders: processedData,
-          importBatchId: batchId,
-          platform: 'SHOPEE'
-        })
+      // Aplicar lógica empresarial local
+      const processedOrders = processedData.map(order => {
+        // Calcular taxas totais
+        const totalFees = (order.commission_fee || 0) + (order.service_fee || 0) + 
+                         (order.transaction_fee || 0) + (order.seller_voucher || 0) +
+                         (order.seller_coin_cashback || 0) + (order.reverse_shipping_fee || 0);
+        
+        // Calcular lucro bruto
+        const grossProfit = order.sale_price - totalFees - (order.product_cost || 0);
+        
+        // Aplicar regras empresariais
+        let netProfit = grossProfit;
+        let processingNotes = 'Venda normal';
+        
+        if (order.status === 'Cancelado') {
+          if (order.reverse_shipping_fee > 0 || totalFees > 0) {
+            netProfit = -(order.reverse_shipping_fee + totalFees);
+            processingNotes = 'Cancelado com custos não estornados';
+          } else {
+            netProfit = 0;
+            processingNotes = 'Cancelado sem custos';
+          }
+        } else if (order.status === 'Devolução/Reembolso') {
+          netProfit = -((order.product_cost || 0) + order.reverse_shipping_fee + totalFees);
+          processingNotes = 'Devolução/Reembolso - prejuízo total';
+        }
+        
+        return {
+          ...order,
+          total_fees: totalFees,
+          gross_profit: grossProfit,
+          net_profit: netProfit,
+          processing_notes: processingNotes,
+          id: crypto.randomUUID(),
+          imported_at: new Date().toISOString()
+        };
       });
 
-      const result = await response.json();
+      // Salvar no localStorage
+      const existingData = JSON.parse(localStorage.getItem(`shopeeflow_orders_${userId}`) || '[]');
+      
+      // Verificar duplicatas
+      const newOrders = processedOrders.filter(newOrder => 
+        !existingData.some(existing => existing.order_id === newOrder.order_id)
+      );
+      
+      const duplicateCount = processedOrders.length - newOrders.length;
+      const allData = [...existingData, ...newOrders];
+      
+      localStorage.setItem(`shopeeflow_orders_${userId}`, JSON.stringify(allData));
+      
+      // Simular resposta da API
+      const result = {
+        success: true,
+        summary: {
+          total: processedData.length,
+          successful: newOrders.length,
+          failed: 0,
+          duplicates: duplicateCount,
+          errors: []
+        },
+        processed_orders: newOrders
+      };
 
-      if (response.ok) {
-        setImportStatus('success');
-        setImportMessage(`✅ ${result.summary.successful} pedidos importados com sucesso!`);
-        
-        if (result.summary.failed > 0) {
-          setImportMessage(prev => prev + ` ⚠️ ${result.summary.failed} pedidos com erros.`);
-        }
-        
-        if (result.summary.duplicates > 0) {
-          setImportMessage(prev => prev + ` ℹ️ ${result.summary.duplicates} pedidos duplicados ignorados.`);
-        }
-
-        setImportSummary(result.summary);
-        
-        // Limpar dados e fechar modal após sucesso
-        setTimeout(() => {
-          setImportedData([]);
-          setProcessedData([]);
-          setShowUploadModal(false);
-          setIsProcessing(false);
-          
-          // Recarregar dashboard
-          window.location.reload();
-        }, 3000);
-      } else {
-        throw new Error(result.error || 'Erro na importação');
+      setImportStatus('success');
+      setImportMessage(`✅ ${result.summary.successful} pedidos importados com sucesso!`);
+      
+      if (result.summary.duplicates > 0) {
+        setImportMessage(prev => prev + ` ℹ️ ${result.summary.duplicates} pedidos duplicados ignorados.`);
       }
+
+      setImportSummary(result.summary);
+      
+      // Limpar dados e fechar modal após sucesso
+      setTimeout(() => {
+        setImportedData([]);
+        setProcessedData([]);
+        setShowUploadModal(false);
+        setIsProcessing(false);
+        
+        // Recarregar dashboard
+        window.location.reload();
+      }, 3000);
+      
     } catch (error) {
       console.error('[IMPORT] Erro:', error);
       setImportStatus('error');
