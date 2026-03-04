@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import MonthlySummary from '../components/MonthlySummary';
 
 export default function Dashboard({ userId }) {
   const [dateRange, setDateRange] = useState({
@@ -54,7 +55,7 @@ export default function Dashboard({ userId }) {
           
           const grossRevenue = filteredOrders.reduce((sum, o) => sum + (o.sale_price || 0), 0);
           const totalCost = filteredOrders.reduce((sum, o) => sum + (o.product_cost || 0), 0);
-          const totalFees = filteredOrders.reduce((sum, o) => sum + (o.total_fees || 0), 0);
+          const totalFees = filteredOrders.reduce((sum, o) => sum + (o.total_fees || (o.shopee_fee || 0) + (o.seller_voucher || 0) + (o.shopee_voucher || 0) + (o.coins_cashback || 0) + (o.reverse_shipping_fee || 0) + (o.fixed_fee || 0)), 0);
           const netRevenue = grossRevenue - totalFees;
           const grossProfit = netRevenue - totalCost;
           
@@ -364,6 +365,9 @@ export default function Dashboard({ userId }) {
           </div>
         </div>
       </div>
+
+      {/* Resumo Mensal - Novo Componente */}
+      <MonthlySummary userId={userId} />
 
       {/* Alertas de Performance */}
       {(summary.loss_orders > 0 || summary.cancelled_orders > 0) && (
