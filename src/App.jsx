@@ -2,9 +2,74 @@ import React, { useState, useEffect } from 'react';
 import Dashboard from './pages/Dashboard';
 import FinancialDetective from './components/FinancialDetective';
 import ProductAnalytics from './components/ProductAnalytics';
-import { Upload, X, Package, Search, TrendingUp, AlertCircle, CheckCircle, Calendar, Filter, Plus, List } from 'lucide-react';
+import { Upload, X, Package, Search, TrendingUp, AlertCircle, CheckCircle, Calendar, Filter, Plus, List, DollarSign } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart, Bar } from 'recharts';
+
+// 💰 CUSTOS PADRÃO PRÉ-CADASTRADOS (SEM DUPLICATAS)
+const PRESET_COSTS = {
+  "ESTANTE4PRATBANCO": 36.03, 
+  "ESTANTE5PRAT": 40.92, 
+  "DECK40X40CM3UN": 27.18, 
+  "ESTANTESANITA4PRAT": 16.18, 
+  "ESTANTE3PRAT65X302UN": 39.00, 
+  "3UNIPALLET50X50CM": 37.20,
+  "ESTANTE3CRUA": 18.85, 
+  "DECK30X30": 5.59, 
+  "DECK40X40CM4UN": 36.24, 
+  "ESTANTE65CM2UN": 49.42,
+  "ESTANTE2PRAT": 16.27, 
+  "GABINETEBANHEIRO": 22.96, 
+  "ESTANTE3PRAT2UN": 37.70,
+  "ESTRADO25X25CM": 3.55, 
+  "CAPABOTIJAO": 59.79, 
+  "PALLET": 12.40, 
+  "ESTANTE4PRAT": 34.88,
+  "SAPATEIROBANCO": 40.93, 
+  "2UNIESTANTE65X50CM": 49.42, 
+  "PALLET40X40CM": 10.10,
+  "2UNIESTANTE3CRUA": 37.70, 
+  "10UNIDECK30X30CM": 55.90, 
+  "DECK30X30CM": 5.59,
+  "02UNIESTANTE65X50": 49.42, 
+  "SUPPLANTA": 2.74, 
+  "ESTANTE5PRAT100X50X30": 40.92,
+  "SUPPLANTA5UNI": 13.10, 
+  "DECK30X30CM3UN": 16.77, 
+  "PALLET50X50CM": 12.40,
+  "DECK30X30CM2UN": 11.18, 
+  "PRATELEIRAVASOS70X50CM": 38.94, 
+  "ESTANTE3CRUAFECHADA": 25.62,
+  "ESTANTE65X30X30": 19.50, 
+  "CAVALETE70CM2UNI": 21.84, 
+  "02UNIPALLET50X50": 24.80,
+  "25UNIRIPA40CM": 19.75, 
+  "ARARAINFANTIL": 21.93, 
+  "ESTANTE3PRAT": 18.85,
+  "SUPPLANTA4UNI": 10.96, 
+  "4UNIDECK30X30CM": 22.36, 
+  "ESTRADO25X25CM4UNI": 14.20,
+  "02UNICAVALETE70CM": 21.84, 
+  "CAVALETE70CM": 10.92, 
+  "SUPPLANTA2UNI": 5.48,
+  "ARARAINFATIL": 21.93, 
+  "SUPPLANTA2UN": 5.48,
+  "ESTANTE65CM": 24.71,
+  "BARALHOCOPAGKITGABINETE_ESTANTESANITARI1PRAT": 39.14, 
+  "SUPPLANTA3UNI": 8.22,
+  "DECK40X40CM2UN": 18.12, 
+  "100LITROS006": 20.00, 
+  "ESTANTE65X50CM": 24.71,
+  "ESTANTE3PRAT65X30": 19.50, 
+  "TABUA20X60CM": 0.00, 
+  "ESTANTE65X50X30": 24.71,
+  "02UNICAVALETE80CM": 21.84, 
+  "DECK40X40CM": 9.06, 
+  "SUPARANDELA": 1.76,
+  "DECK30X30CM4UN": 22.36, 
+  "ESTANTESANITA1PRAT": 16.78, 
+  "03UNICAVALETE70CM": 32.76
+};
 
 export default function App() {
   const [userId, setUserId] = useState(null);
@@ -437,24 +502,33 @@ export default function App() {
     try {
       const batchId = crypto.randomUUID();
       
-      // 🔍 BUSCAR CUSTOS JÁ CADASTRADOS
+      // 🔍 BUSCAR CUSTOS JÁ CADASTRADOS E PADRÕES
       const existingProducts = JSON.parse(localStorage.getItem(`shopeeflow_products_${userId}`) || '[]');
       const productCosts = {};
       
-      // Criar mapa de custos por SKU
+      // Criar mapa de custos por SKU (existentes + padrões)
       existingProducts.forEach(product => {
         productCosts[product.sku] = product.current_cost || 0;
       });
       
-      console.log('[CUSTOS] Mapa de custos existentes:', productCosts);
+      // Adicionar custos padrão pré-cadastrados
+      Object.keys(PRESET_COSTS).forEach(sku => {
+        if (!productCosts[sku]) {
+          productCosts[sku] = PRESET_COSTS[sku];
+        }
+      });
       
-      // Aplicar lógica empresarial local com custos existentes
+      console.log('[CUSTOS] Mapa de custos (existentes + padrões):', productCosts);
+      console.log('[CUSTOS] Total de SKUs com custos:', Object.keys(productCosts).length);
+      
+      // Aplicar lógica empresarial local com custos existentes/padrões
       const processedOrders = processedData.map(order => {
         // 🔥 USAR CUSTO JÁ CADASTRADO ou PADRÃO
         const existingCost = productCosts[order.sku_variation] || 0;
-        const productCost = existingCost > 0 ? existingCost : (order.product_cost || 0);
+        const presetCost = PRESET_COSTS[order.sku_variation] || 0;
+        const productCost = existingCost > 0 ? existingCost : presetCost;
         
-        console.log(`[CUSTO] SKU ${order.sku_variation}: usando R$ ${productCost} (existente: R$ ${existingCost})`);
+        console.log(`[CUSTO] SKU ${order.sku_variation}: usando R$ ${productCost} (existente: R$ ${existingCost}, padrão: R$ ${presetCost})`);
         
         // Calcular taxas totais
         const totalFees = (order.commission_fee || 0) + (order.service_fee || 0) + 
@@ -466,7 +540,15 @@ export default function App() {
         
         // Aplicar regras empresariais
         let netProfit = grossProfit;
-        let processingNotes = existingCost > 0 ? 'Venda normal (custo existente)' : 'Venda normal (custo padrão)';
+        let processingNotes = 'Venda normal';
+        
+        if (existingCost > 0) {
+          processingNotes = 'Venda normal (custo cadastrado)';
+        } else if (presetCost > 0) {
+          processingNotes = 'Venda normal (custo padrão)';
+        } else {
+          processingNotes = 'Venda normal (sem custo)';
+        }
         
         if (order.status === 'Cancelado') {
           if (order.reverse_shipping_fee > 0 || totalFees > 0) {
@@ -483,7 +565,7 @@ export default function App() {
         
         return {
           ...order,
-          product_cost: productCost, // Usar custo existente
+          product_cost: productCost, // Usar custo existente ou padrão
           total_fees: totalFees,
           gross_profit: grossProfit,
           net_profit: netProfit,
@@ -507,10 +589,11 @@ export default function App() {
       localStorage.setItem(`shopeeflow_orders_${userId}`, JSON.stringify(allData));
       
       // 📊 ESTATÍSTICAS DE CUSTOS USADOS
-      const usedExistingCosts = newOrders.filter(o => productCosts[o.sku_variation] > 0).length;
-      const usedDefaultCosts = newOrders.filter(o => productCosts[o.sku_variation] === 0).length;
+      const usedExistingCosts = newOrders.filter(o => productCosts[o.sku_variation] > 0 && !PRESET_COSTS[o.sku_variation]).length;
+      const usedPresetCosts = newOrders.filter(o => PRESET_COSTS[o.sku_variation] > 0).length;
+      const usedNoCosts = newOrders.filter(o => productCosts[o.sku_variation] === 0).length;
       
-      console.log(`[CUSTOS] ${usedExistingCosts} pedidos com custos existentes, ${usedDefaultCosts} com custos padrão`);
+      console.log(`[CUSTOS] ${usedExistingCosts} pedidos com custos cadastrados, ${usedPresetCosts} com custos padrão, ${usedNoCosts} sem custo`);
       
       // Simular resposta da API
       const result = {
@@ -523,7 +606,8 @@ export default function App() {
           errors: [],
           cost_stats: {
             used_existing_costs: usedExistingCosts,
-            used_default_costs: usedDefaultCosts
+            used_preset_costs: usedPresetCosts,
+            used_no_costs: usedNoCosts
           }
         },
         processed_orders: newOrders
@@ -538,6 +622,14 @@ export default function App() {
       
       if (result.summary.cost_stats.used_existing_costs > 0) {
         setImportMessage(prev => prev + ` 💰 ${result.summary.cost_stats.used_existing_costs} pedidos usaram custos cadastrados.`);
+      }
+      
+      if (result.summary.cost_stats.used_preset_costs > 0) {
+        setImportMessage(prev => prev + ` 📋 ${result.summary.cost_stats.used_preset_costs} pedidos usaram custos padrão.`);
+      }
+      
+      if (result.summary.cost_stats.used_no_costs > 0) {
+        setImportMessage(prev => prev + ` ⚠️ ${result.summary.cost_stats.used_no_costs} pedidos sem custo definido.`);
       }
 
       setImportSummary(result.summary);
@@ -613,6 +705,19 @@ export default function App() {
       console.error('[PRODUTO] Erro ao salvar produto:', error);
       alert('Erro ao salvar produto. Tente novamente.');
     }
+  };
+
+  // 📋 FUNÇÃO PARA LISTAR CUSTOS PADRÃO DISPONÍVEIS
+  const handleListPresetCosts = () => {
+    let costList = '📋 CUSTOS PADRÃO PRÉ-CADASTRADOS:\n\n';
+    costList += Object.entries(PRESET_COSTS).map(([sku, cost], index) => 
+      `${index + 1}. ${sku}\n   💰 Custo: R$ ${cost.toFixed(2)}\n`
+    ).join('\n');
+    
+    costList += `\nTotal: ${Object.keys(PRESET_COSTS).length} produtos com custos padrão`;
+    costList += '\n\n💡 DICA: Estes custos são usados automaticamente quando não há custo cadastrado para o SKU.';
+    
+    alert(costList);
   };
 
   // 📋 FUNÇÃO PARA LISTAR PRODUTOS CADASTRADOS
@@ -698,6 +803,15 @@ export default function App() {
               >
                 <List size={16} />
                 Ver Produtos
+              </button>
+              
+              <button 
+                onClick={handleListPresetCosts}
+                className="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors"
+                title="Ver custos padrão pré-cadastrados"
+              >
+                <DollarSign size={16} />
+                Custos Padrão
               </button>
               
               <button 
@@ -802,6 +916,7 @@ export default function App() {
                   <p>• Detecção automática: "Order.all" (Linha 0) ou "Relatórios Financeiros" (Linha 12)</p>
                   <p>• Parser preciso: R$ 1.234,56 → 1234.56 | 1,234.56 → 1234.56</p>
                   <p>• Mapeamento completo: Preço, Taxas, Cupons, Envio Reverso, Datas</p>
+                  <p>• 💰 CUSTOS AUTOMÁTICOS: {Object.keys(PRESET_COSTS).length} produtos pré-cadastrados</p>
                 </div>
                 <input
                   type="file"
@@ -907,6 +1022,16 @@ export default function App() {
                         }
                       </span>
                     </div>
+                    {importSummary.cost_stats && (
+                      <div>
+                        <span className="text-gray-600">Custos Utilizados:</span>
+                        <span className="ml-2 font-medium">
+                          {importSummary.cost_stats.used_existing_costs || 0} cadastrados + 
+                          {importSummary.cost_stats.used_preset_costs || 0} padrões + 
+                          {importSummary.cost_stats.used_no_costs || 0} sem custo
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -959,7 +1084,7 @@ export default function App() {
                           <th className="text-left p-2">Data</th>
                         </tr>
                       </thead>
-                      <tbody>
+                      <tbody className="divide-y divide-gray-200">
                         {processedData.slice(0, 20).map((row, idx) => {
                           const totalFees = (row.commission_fee || 0) + (row.service_fee || 0) + 
                                            (row.transaction_fee || 0) + (row.seller_voucher || 0) + 
