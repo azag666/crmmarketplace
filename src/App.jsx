@@ -78,7 +78,7 @@ export default function App() {
     return () => supabase.removeChannel(channel);
   }, [user]);
 
-  // --- 3. Lógica de Importação de Excel (Shopee Format) ---
+  // --- 3. Lógica de Importação de Excel (Formato Shopee Oficial) ---
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -93,38 +93,38 @@ export default function App() {
 
       if (!data || data.length === 0) return;
 
-      // Normaliza cabeçalhos para encontrar as colunas
+      // Normaliza cabeçalhos para encontrar as colunas independentemente de maiúsculas/minúsculas
       const headers = data[0].map(h => h?.toString().toLowerCase().trim());
       
-      // Mapeamento exato da Planilha Shopee
+      // Mapeamento baseado no seu arquivo enviado
       const idxId = headers.findIndex(h => h === 'id do pedido');
       const idxProd = headers.findIndex(h => h === 'nome do produto');
-      // "Preço acordado" é o valor real da venda após descontos do vendedor
-      const idxPrice = headers.findIndex(h => h === 'preço acordado' || h === 'preço original');
+      const idxPrice = headers.findIndex(h => h === 'preço acordado'); // Valor da venda
       
-      // Colunas de taxas (para somar o custo total da Shopee)
-      const idxFeeComissao = headers.findIndex(h => h.includes('taxa de comissão'));
-      const idxFeeServico = headers.findIndex(h => h.includes('taxa de serviço'));
-      const idxFeeTransacao = headers.findIndex(h => h.includes('taxa de transação'));
+      // Taxas (Shopee separa em várias colunas)
+      const idxFeeComissao = headers.findIndex(h => h === 'taxa de comissão bruta');
+      const idxFeeServico = headers.findIndex(h => h === 'taxa de serviço bruta'); // Às vezes aparece como 'taxa de serviço'
+      const idxFeeTransacao = headers.findIndex(h => h === 'taxa de transação');
 
       if (idxId === -1 || idxProd === -1) {
-        alert("Erro: Não encontramos as colunas 'ID do pedido' ou 'Nome do Produto'. Verifique se é a planilha oficial da Shopee.");
+        alert("Erro: Colunas 'ID do pedido' ou 'Nome do Produto' não encontradas. Verifique se é a planilha original da Shopee.");
         return;
       }
 
       const preview = data.slice(1).map((row, index) => {
         if (!row[idxId]) return null;
         
-        // Função auxiliar para limpar valores monetários (ex: "R$ 1.200,00" ou 1200.00)
+        // Função para limpar valores monetários (R$ 1.200,50 ou 1200.50)
         const parseMoney = (val) => {
           if (typeof val === 'number') return val;
           if (!val) return 0;
-          // Se for string, remove R$ e converte
           let clean = val.toString().replace('R$', '').trim();
-          // Se tiver vírgula e ponto, assume formato BR (1.000,00) -> 1000.00
+          // Lógica para detectar formato brasileiro (1.000,00) vs internacional (1000.00)
           if (clean.includes(',') && clean.includes('.')) {
+             // Formato 1.000,00 -> remove ponto, troca vírgula por ponto
              clean = clean.replace(/\./g, '').replace(',', '.');
           } else if (clean.includes(',')) {
+             // Formato 1000,00 -> troca vírgula por ponto
              clean = clean.replace(',', '.');
           }
           return parseFloat(clean) || 0;
@@ -132,13 +132,14 @@ export default function App() {
 
         const salePrice = parseMoney(row[idxPrice]);
         
-        // Soma todas as taxas da Shopee que estiverem disponíveis na linha
+        // Soma todas as taxas encontradas
         let totalShopeeFees = 0;
         if (idxFeeComissao !== -1) totalShopeeFees += parseMoney(row[idxFeeComissao]);
         if (idxFeeServico !== -1) totalShopeeFees += parseMoney(row[idxFeeServico]);
         if (idxFeeTransacao !== -1) totalShopeeFees += parseMoney(row[idxFeeTransacao]);
 
-        // Se por acaso as taxas vierem zeradas na planilha (ex: pedido novo), estima 20%
+        // Se o pedido for muito recente, as taxas podem vir zeradas na planilha.
+        // Nesse caso, aplicamos uma estimativa de segurança (20% padrão).
         if (totalShopeeFees === 0 && salePrice > 0) {
            totalShopeeFees = salePrice * 0.20; 
         }
@@ -148,9 +149,9 @@ export default function App() {
           order_id: row[idxId],
           product_name: row[idxProd],
           sale_price: salePrice,
-          product_cost: 0, // Usuário preenche
-          shopee_fee: totalShopeeFees, 
-          fixed_fee: 0 // Já somamos tudo no shopee_fee para ser exato
+          product_cost: 0, // Custo será preenchido manualmente ou pelo padrão
+          shopee_fee: Math.abs(totalShopeeFees), // Garante que seja positivo para subtrair depois
+          fixed_fee: 0 // As taxas da Shopee já incluem tudo nas colunas acima
         };
       }).filter(Boolean);
 
@@ -305,7 +306,7 @@ export default function App() {
                 <h4 className="font-black text-sm uppercase tracking-widest">Performance</h4>
               </div>
               <p className="text-slate-400 text-xs leading-relaxed mb-4 font-medium">
-                Sua margem ideal deve ser acima de 20%. Ajuste seus custos se necessário.
+                Monitore suas taxas de perto. As taxas exibidas aqui são a soma de Comissão + Serviço + Transação da Shopee.
               </p>
               <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
                 <div className="bg-emerald-500 h-full transition-all duration-1000" style={{ width: `${Math.min(metrics.margin * 2, 100)}%` }}></div>
@@ -322,7 +323,7 @@ export default function App() {
             <div className="bg-emerald-600 p-6 text-white flex justify-between items-center">
               <div>
                 <h3 className="text-xl font-black italic flex items-center gap-2"><Upload/> IMPORTAR SHOPEE</h3>
-                <p className="text-emerald-100 text-xs font-bold mt-1 uppercase tracking-widest">Leitura automática de taxas</p>
+                <p className="text-emerald-100 text-xs font-bold mt-1 uppercase tracking-widest">Processamento Automático de Taxas</p>
               </div>
               <button onClick={() => {setShowUploadModal(false); setImportedData([]);}} className="hover:bg-emerald-500 p-2 rounded-lg transition-colors"><X/></button>
             </div>
@@ -336,7 +337,7 @@ export default function App() {
                   <input type="file" hidden ref={fileInputRef} accept=".xlsx, .xls, .csv" onChange={handleFileUpload} />
                   <div className="bg-slate-100 p-4 rounded-full mb-4 group-hover:scale-110 transition-transform"><FileText size={40} className="text-slate-400 group-hover:text-emerald-500" /></div>
                   <h4 className="text-lg font-black text-slate-700">Clique para selecionar</h4>
-                  <p className="text-slate-400 text-sm mt-1 font-medium">Use a planilha "Meus Pedidos" da Shopee</p>
+                  <p className="text-slate-400 text-sm mt-1 font-medium">Use o arquivo Order.all...xlsx</p>
                 </div>
               ) : (
                 <div className="space-y-6">
@@ -345,8 +346,8 @@ export default function App() {
                     <div className="flex gap-4">
                       <div className="bg-yellow-100 p-3 rounded-xl h-fit"><AlertCircle className="text-yellow-600" /></div>
                       <div>
-                        <h4 className="font-black text-yellow-800 text-sm uppercase">Definir Custo do Produto (CMV)</h4>
-                        <p className="text-yellow-700 text-xs mt-1">Preencha um custo padrão para aplicar a todos, ou edite linha por linha.</p>
+                        <h4 className="font-black text-yellow-800 text-sm uppercase">Custo do Produto (CMV)</h4>
+                        <p className="text-yellow-700 text-xs mt-1">Defina um custo padrão para todos ou edite individualmente abaixo.</p>
                       </div>
                     </div>
                     <div className="flex items-center gap-2 bg-white p-2 rounded-xl border border-yellow-200 shadow-sm">
@@ -371,10 +372,10 @@ export default function App() {
                         <tr>
                           <th className="p-4">Pedido</th>
                           <th className="p-4">Produto</th>
-                          <th className="p-4 text-right">Venda</th>
-                          <th className="p-4 text-right text-orange-500">Taxas</th>
-                          <th className="p-4 text-right text-red-400">Custo</th>
-                          <th className="p-4 text-right">Lucro</th>
+                          <th className="p-4 text-right">Preço Acordado</th>
+                          <th className="p-4 text-right text-orange-500">Taxas Shopee</th>
+                          <th className="p-4 text-right text-red-400">Custo (CMV)</th>
+                          <th className="p-4 text-right">Lucro Real</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-50">
