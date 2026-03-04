@@ -7,7 +7,7 @@ import {
 import { 
   TrendingUp, DollarSign, AlertCircle, 
   FileText, Trash2, Calculator, ArrowUpRight, 
-  Plus, Upload, Save, X, ChevronRight
+  Plus, Upload, Save, X, ChevronRight, Package, Check
 } from 'lucide-react';
 
 // --- Inicialização do Supabase ---
@@ -24,8 +24,8 @@ export default function App() {
   const [errorMsg, setErrorMsg] = useState(null);
   
   // Estados para importação
-  const [importedData, setImportedData] = useState([]);
-  const [defaultCost, setDefaultCost] = useState(0);
+  const [importedData, setImportedData] = useState([]); // Dados brutos expandidos
+  const [uniqueProducts, setUniqueProducts] = useState([]); // Resumo por SKU para edição
   const fileInputRef = useRef(null);
 
   // --- 1. Autenticação ---
@@ -78,7 +78,7 @@ export default function App() {
     return () => supabase.removeChannel(channel);
   }, [user]);
 
-  // --- 3. Lógica de Importação de Excel (Formato Shopee Oficial) ---
+  // --- 3. Lógica de Importação de Excel ---
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -93,71 +93,98 @@ export default function App() {
 
       if (!data || data.length === 0) return;
 
-      // Normaliza cabeçalhos para encontrar as colunas independentemente de maiúsculas/minúsculas
       const headers = data[0].map(h => h?.toString().toLowerCase().trim());
       
-      // Mapeamento baseado no seu arquivo enviado
+      // Mapeamento Shopee Padrão + Planilha Julho (W/X)
       const idxId = headers.findIndex(h => h === 'id do pedido');
       const idxProd = headers.findIndex(h => h === 'nome do produto');
-      const idxPrice = headers.findIndex(h => h === 'preço acordado'); // Valor da venda
+      const idxSku = headers.findIndex(h => h === 'número de referência sku' || h === 'número de referência sku principal');
+      const idxPrice = headers.findIndex(h => h === 'preço acordado'); 
       
-      // Taxas (Shopee separa em várias colunas)
-      const idxFeeComissao = headers.findIndex(h => h === 'taxa de comissão bruta');
-      const idxFeeServico = headers.findIndex(h => h === 'taxa de serviço bruta'); // Às vezes aparece como 'taxa de serviço'
+      // Colunas de Custo (Se existirem, como na planilha de Julho)
+      const idxCostUnit = headers.findIndex(h => h.includes('custo unitario') || h.includes('custo unitário'));
+      
+      // Taxas
+      const idxFeeComissao = headers.findIndex(h => h === 'taxa de comissão bruta' || h === 'taxa de comissão');
+      const idxFeeServico = headers.findIndex(h => h === 'taxa de serviço bruta' || h === 'taxa de serviço');
       const idxFeeTransacao = headers.findIndex(h => h === 'taxa de transação');
 
       if (idxId === -1 || idxProd === -1) {
-        alert("Erro: Colunas 'ID do pedido' ou 'Nome do Produto' não encontradas. Verifique se é a planilha original da Shopee.");
+        alert("Erro: Colunas 'ID do pedido' ou 'Nome do Produto' não encontradas.");
         return;
       }
 
-      const preview = data.slice(1).map((row, index) => {
+      const rawItems = data.slice(1).map((row, index) => {
         if (!row[idxId]) return null;
         
-        // Função para limpar valores monetários (R$ 1.200,50 ou 1200.50)
         const parseMoney = (val) => {
           if (typeof val === 'number') return val;
           if (!val) return 0;
           let clean = val.toString().replace('R$', '').trim();
-          // Lógica para detectar formato brasileiro (1.000,00) vs internacional (1000.00)
-          if (clean.includes(',') && clean.includes('.')) {
-             // Formato 1.000,00 -> remove ponto, troca vírgula por ponto
-             clean = clean.replace(/\./g, '').replace(',', '.');
-          } else if (clean.includes(',')) {
-             // Formato 1000,00 -> troca vírgula por ponto
-             clean = clean.replace(',', '.');
-          }
+          if (clean.includes(',') && clean.includes('.')) clean = clean.replace(/\./g, '').replace(',', '.');
+          else if (clean.includes(',')) clean = clean.replace(',', '.');
           return parseFloat(clean) || 0;
         };
 
         const salePrice = parseMoney(row[idxPrice]);
-        
-        // Soma todas as taxas encontradas
         let totalShopeeFees = 0;
         if (idxFeeComissao !== -1) totalShopeeFees += parseMoney(row[idxFeeComissao]);
         if (idxFeeServico !== -1) totalShopeeFees += parseMoney(row[idxFeeServico]);
         if (idxFeeTransacao !== -1) totalShopeeFees += parseMoney(row[idxFeeTransacao]);
+        
+        // Se as taxas vierem zeradas (pedido recente), estima 20%
+        if (totalShopeeFees === 0 && salePrice > 0) totalShopeeFees = salePrice * 0.20;
 
-        // Se o pedido for muito recente, as taxas podem vir zeradas na planilha.
-        // Nesse caso, aplicamos uma estimativa de segurança (20% padrão).
-        if (totalShopeeFees === 0 && salePrice > 0) {
-           totalShopeeFees = salePrice * 0.20; 
-        }
+        // Se tiver coluna de custo (Planilha Julho), usa ela. Se não, 0.
+        const costFromFile = idxCostUnit !== -1 ? parseMoney(row[idxCostUnit]) : 0;
 
         return {
-          id: index,
+          temp_id: index,
           order_id: row[idxId],
           product_name: row[idxProd],
+          sku: row[idxSku] || row[idxProd], // Usa SKU ou Nome como chave
           sale_price: salePrice,
-          product_cost: 0, // Custo será preenchido manualmente ou pelo padrão
-          shopee_fee: Math.abs(totalShopeeFees), // Garante que seja positivo para subtrair depois
-          fixed_fee: 0 // As taxas da Shopee já incluem tudo nas colunas acima
+          product_cost: costFromFile, 
+          shopee_fee: Math.abs(totalShopeeFees), 
+          fixed_fee: 0 
         };
       }).filter(Boolean);
 
-      setImportedData(preview);
+      // --- AGRUPAR POR SKU PARA O USUÁRIO EDITAR ---
+      const summaryMap = {};
+      rawItems.forEach(item => {
+        const key = item.sku;
+        if (!summaryMap[key]) {
+          summaryMap[key] = {
+            sku: key,
+            name: item.product_name,
+            count: 0,
+            total_sales: 0,
+            cost: item.product_cost // Pega o custo do primeiro item (se veio do arquivo)
+          };
+        }
+        summaryMap[key].count += 1;
+        summaryMap[key].total_sales += item.sale_price;
+      });
+
+      setUniqueProducts(Object.values(summaryMap));
+      setImportedData(rawItems);
     };
     reader.readAsBinaryString(file);
+  };
+
+  // Atualiza o custo de todos os pedidos quando o usuário edita o "Produto Único"
+  const handleCostChange = (sku, newCost) => {
+    // 1. Atualiza a lista resumida (UI)
+    setUniqueProducts(prev => prev.map(p => p.sku === sku ? { ...p, cost: newCost } : p));
+    
+    // 2. Atualiza a lista completa de pedidos (Dados Reais)
+    setImportedData(prev => prev.map(order => {
+      if ((order.sku || order.product_name) === sku) {
+        return { ...order, product_cost: newCost };
+      }
+      return order;
+    }));
   };
 
   const saveBatch = async () => {
@@ -168,7 +195,7 @@ export default function App() {
       order_id: item.order_id,
       product_name: item.product_name,
       sale_price: item.sale_price,
-      product_cost: item.product_cost || defaultCost,
+      product_cost: item.product_cost,
       shopee_fee: item.shopee_fee,
       fixed_fee: item.fixed_fee
     }));
@@ -179,6 +206,7 @@ export default function App() {
     } else {
       setShowUploadModal(false);
       setImportedData([]);
+      setUniqueProducts([]);
       alert(`Sucesso! ${payload.length} pedidos importados.`);
     }
   };
@@ -316,16 +344,18 @@ export default function App() {
         </div>
       </div>
 
-      {/* MODAL DE UPLOAD */}
+      {/* MODAL DE UPLOAD (AGRUPADO) */}
       {showUploadModal && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
-          <div className="bg-white rounded-[2rem] w-full max-w-4xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
+          <div className="bg-white rounded-[2rem] w-full max-w-5xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
             <div className="bg-emerald-600 p-6 text-white flex justify-between items-center">
               <div>
                 <h3 className="text-xl font-black italic flex items-center gap-2"><Upload/> IMPORTAR SHOPEE</h3>
-                <p className="text-emerald-100 text-xs font-bold mt-1 uppercase tracking-widest">Processamento Automático de Taxas</p>
+                <p className="text-emerald-100 text-xs font-bold mt-1 uppercase tracking-widest">
+                  {importedData.length > 0 ? `${importedData.length} Pedidos encontrados` : 'Importação Automática'}
+                </p>
               </div>
-              <button onClick={() => {setShowUploadModal(false); setImportedData([]);}} className="hover:bg-emerald-500 p-2 rounded-lg transition-colors"><X/></button>
+              <button onClick={() => {setShowUploadModal(false); setImportedData([]); setUniqueProducts([])}} className="hover:bg-emerald-500 p-2 rounded-lg transition-colors"><X/></button>
             </div>
             
             <div className="p-6 overflow-y-auto flex-1 bg-slate-50">
@@ -337,87 +367,76 @@ export default function App() {
                   <input type="file" hidden ref={fileInputRef} accept=".xlsx, .xls, .csv" onChange={handleFileUpload} />
                   <div className="bg-slate-100 p-4 rounded-full mb-4 group-hover:scale-110 transition-transform"><FileText size={40} className="text-slate-400 group-hover:text-emerald-500" /></div>
                   <h4 className="text-lg font-black text-slate-700">Clique para selecionar</h4>
-                  <p className="text-slate-400 text-sm mt-1 font-medium">Use o arquivo Order.all...xlsx</p>
+                  <p className="text-slate-400 text-sm mt-1 font-medium">Suporta "Order.all..." (Shopee) ou Planilha com Custos</p>
                 </div>
               ) : (
                 <div className="space-y-6">
-                  {/* CONFIGURAÇÃO DE CUSTO */}
-                  <div className="bg-yellow-50 p-6 rounded-2xl border border-yellow-100 flex flex-col md:flex-row justify-between items-center gap-4">
-                    <div className="flex gap-4">
-                      <div className="bg-yellow-100 p-3 rounded-xl h-fit"><AlertCircle className="text-yellow-600" /></div>
-                      <div>
-                        <h4 className="font-black text-yellow-800 text-sm uppercase">Custo do Produto (CMV)</h4>
-                        <p className="text-yellow-700 text-xs mt-1">Defina um custo padrão para todos ou edite individualmente abaixo.</p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2 bg-white p-2 rounded-xl border border-yellow-200 shadow-sm">
-                      <span className="font-bold text-slate-400 text-xs uppercase pl-2">R$</span>
-                      <input 
-                        type="number" 
-                        value={defaultCost} 
-                        onChange={(e) => {
-                          const val = parseFloat(e.target.value);
-                          setDefaultCost(val);
-                          setImportedData(prev => prev.map(p => ({...p, product_cost: val})));
-                        }}
-                        className="w-24 p-2 rounded-lg font-black text-slate-800 outline-none"
-                      />
-                    </div>
-                  </div>
-
-                  {/* TABELA DE PRÉVIA */}
+                  
+                  {/* TABELA DE PRODUTOS ÚNICOS (AGRUPADOS) */}
                   <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+                    <div className="bg-yellow-50 p-4 border-b border-yellow-100 flex items-center gap-3">
+                       <Package className="text-yellow-600" size={20}/>
+                       <div>
+                         <h4 className="font-black text-yellow-800 text-sm uppercase">Definição de Custos</h4>
+                         <p className="text-yellow-700 text-xs">Agrupamos {importedData.length} pedidos em {uniqueProducts.length} produtos únicos. Defina o custo unitário abaixo:</p>
+                       </div>
+                    </div>
+                    
                     <table className="w-full text-left text-xs">
                       <thead className="bg-slate-50 uppercase font-black text-slate-400 border-b border-slate-100">
                         <tr>
-                          <th className="p-4">Pedido</th>
-                          <th className="p-4">Produto</th>
-                          <th className="p-4 text-right">Preço Acordado</th>
-                          <th className="p-4 text-right text-orange-500">Taxas Shopee</th>
-                          <th className="p-4 text-right text-red-400">Custo (CMV)</th>
-                          <th className="p-4 text-right">Lucro Real</th>
+                          <th className="p-4">Produto / SKU</th>
+                          <th className="p-4 text-center">Qtd Vendas</th>
+                          <th className="p-4 text-right text-red-400">Custo Unitário (R$)</th>
+                          <th className="p-4 text-right">Status</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-50">
-                        {importedData.map((row, idx) => (
-                          <tr key={idx}>
-                            <td className="p-4 font-mono font-bold text-slate-600">{row.order_id}</td>
-                            <td className="p-4 truncate max-w-[150px] font-medium">{row.product_name}</td>
-                            <td className="p-4 text-right font-bold">R$ {row.sale_price.toFixed(2)}</td>
-                            <td className="p-4 text-right text-orange-500 font-bold">- R$ {row.shopee_fee.toFixed(2)}</td>
+                        {uniqueProducts.map((prod, idx) => (
+                          <tr key={idx} className={prod.cost === 0 ? 'bg-red-50/50' : ''}>
+                            <td className="p-4">
+                              <div className="font-bold text-slate-700 truncate max-w-[300px]">{prod.name}</div>
+                              <div className="text-[10px] text-slate-400 font-mono mt-1">{prod.sku}</div>
+                            </td>
+                            <td className="p-4 text-center font-bold text-slate-600 bg-slate-50/50">
+                              {prod.count}x
+                            </td>
                             <td className="p-4 text-right">
                               <input 
                                 type="number" 
-                                value={row.product_cost}
-                                onChange={(e) => {
-                                  const val = parseFloat(e.target.value) || 0;
-                                  const newData = [...importedData];
-                                  newData[idx].product_cost = val;
-                                  setImportedData(newData);
-                                }} 
-                                className="w-20 bg-slate-50 p-2 rounded-lg text-right font-bold text-red-500 border focus:border-red-300 outline-none"
+                                value={prod.cost}
+                                onChange={(e) => handleCostChange(prod.sku, parseFloat(e.target.value) || 0)} 
+                                className="w-24 bg-white border border-slate-200 p-2 rounded-lg text-right font-bold text-red-500 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 outline-none transition-all"
+                                placeholder="0.00"
                               />
                             </td>
-                            <td className="p-4 text-right font-black text-emerald-600">
-                              R$ {(row.sale_price - row.product_cost - row.shopee_fee).toFixed(2)}
+                            <td className="p-4 text-right">
+                              {prod.cost > 0 ? (
+                                <span className="inline-flex items-center gap-1 text-emerald-600 font-bold bg-emerald-50 px-2 py-1 rounded-md">
+                                  <Check size={12}/> OK
+                                </span>
+                              ) : (
+                                <span className="text-red-400 font-bold text-[10px] uppercase">Pendente</span>
+                              )}
                             </td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
                   </div>
+
                 </div>
               )}
             </div>
 
             {importedData.length > 0 && (
               <div className="p-6 border-t border-slate-100 bg-white flex justify-end gap-3">
-                <button onClick={() => setImportedData([])} className="px-6 py-4 font-bold text-slate-400 hover:bg-slate-50 rounded-xl transition-colors">Cancelar</button>
+                <button onClick={() => {setImportedData([]); setUniqueProducts([])}} className="px-6 py-4 font-bold text-slate-400 hover:bg-slate-50 rounded-xl transition-colors">Cancelar</button>
                 <button 
                   onClick={saveBatch}
                   className="bg-emerald-600 text-white px-8 py-4 rounded-xl font-black flex items-center gap-2 hover:bg-emerald-700 shadow-xl shadow-emerald-100 transition-transform active:scale-95"
                 >
-                  <Save size={20} /> SALVAR {importedData.length} PEDIDOS
+                  <Save size={20} /> SALVAR TUDO
                 </button>
               </div>
             )}
@@ -445,7 +464,7 @@ export default function App() {
                 product_name: fd.get('product_name'),
                 sale_price: sale,
                 product_cost: parseFloat(fd.get('product_cost')),
-                shopee_fee: sale * 0.20, // Estimativa manual
+                shopee_fee: sale * 0.20, 
                 fixed_fee: 3.00
               }]);
               if(!error) setShowModal(false);
