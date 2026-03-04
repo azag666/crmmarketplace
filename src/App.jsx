@@ -14,7 +14,26 @@ import {
 } from 'lucide-react';
 
 const PRESET_COSTS = {
-  "ESTANTE4PRATBANCO": 36.03, "ESTANTE5PRAT": 40.92
+  "ESTANTE4PRATBANCO": 36.03, "ESTANTE5PRAT": 40.92, "DECK40X40CM3UN": 27.18, 
+  "ESTANTESANITA4PRAT": 16.18, "ESTANTE3PRAT65X302UN": 39.00, "3UNIPALLET50X50CM": 37.20,
+  "ESTANTE3CRUA": 18.85, "DECK30X30": 5.59, "DECK40X40CM4UN": 36.24, "ESTANTE65CM2UN": 49.42,
+  "ESTANTE2PRAT": 16.27, "GABINETEBANHEIRO": 22.96, "ESTANTE3PRAT2UN": 37.70,
+  "ESTRADO25X25CM": 3.55, "CAPABOTIJÃO": 59.79, "PALLET": 12.40, "ESTANTE4PRAT": 34.88,
+  "SAPATEIROBANCO": 40.93, "2UNIESTANTE65X50CM": 49.42, "PALLET40X40CM": 10.10,
+  "2UNIESTANTE3CRUA": 37.70, "10UNIDECK30X30CM": 55.90, "DECK30X30CM": 5.59,
+  "02UNIESTANTE65X50": 49.42, "SUPPLANTA": 2.74, "ESTANTE5PRAT100X50X30": 40.92,
+  "SUPPLANTA5UNI": 13.10, "DECK30X30CM3UN": 16.77, "PALLET50X50CM": 12.40,
+  "DECK30X30CM2UN": 11.18, "PRATELEIRAVASOS70X50CM": 38.94, "ESTANTE3CRUAFECHADA": 25.62,
+  "ESTANTE65X30X30": 19.50, "CAVALETE70CM2UNI": 21.84, "02UNIPALLET50X50": 24.80,
+  "25UNIRIPA40CM": 19.75, "ARARAINFANTIL": 21.93, "ESTANTE3PRAT": 18.85,
+  "SUPPLANTA4UNI": 10.96, "4UNIDECK30X30CM": 22.36, "ESTRADO25X25CM4UNI": 14.20,
+  "02UNICAVALETE70CM": 21.84, "CAVALETE70CM": 10.92, "SUPPLANTA2UNI": 5.48,
+  "ARARAINFATIL": 21.93, "SUPPLANTA2UN": 5.48, "ESTANTE65CM": 24.71,
+  "BARALHOCOPAGKITGABINETE+ESTANTESANITARI1PRAT": 39.14, "SUPPLANTA3UNI": 8.22,
+  "DECK40X40CM2UN": 18.12, "100litros006": 20.00, "ESTANTE65X50CM": 24.71,
+  "ESTANTE3PRAT65X30": 19.50, "TABUA20X60CM": 0.00, "ESTANTE65X50X30": 24.71,
+  "02UNICAVALETE80CM": 21.84, "DECK40X40CM": 9.06, "SUPARANDELA": 1.76,
+  "DECK30X30CM4UN": 22.36, "ESTANTESANITA1PRAT": 16.78, "03UNICAVALETE70CM": 32.76
 };
 
 export default function App() {
@@ -37,6 +56,12 @@ export default function App() {
   const [uniqueProducts, setUniqueProducts] = useState([]);
   const [productDatabase, setProductDatabase] = useState(PRESET_COSTS);
   const fileInputRef = useRef(null);
+
+  // Filtros de produtos
+  const [productFilter, setProductFilter] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('all');
+  const [profitFilter, setProfitFilter] = useState('all');
+  const [selectedProduct, setSelectedProduct] = useState(null);
 
   // 1. Autenticação
   useEffect(() => {
@@ -99,7 +124,7 @@ export default function App() {
     }
   };
 
-  // --- CÁLCULOS ---
+  // --- CÁLCULOS AVANÇADOS ---
   const analytics = useMemo(() => {
     const validOrders = orders.filter(o => !o.status?.toLowerCase().includes('cancelado'));
     
@@ -120,7 +145,6 @@ export default function App() {
       const dateRaw = o.creation_date || o.created_at;
       if(!dateRaw) return;
       
-      // Ajuste de fuso horário simples para exibição
       const dateObj = new Date(dateRaw);
       const day = dateObj.toLocaleDateString('pt-BR', { timeZone: 'UTC' }); 
       
@@ -150,23 +174,33 @@ export default function App() {
            cost: 0, 
            profit: 0, 
            unitCost: o.product_cost,
-           orders: []
+           orders: [],
+           lossOrders: [],
+           fees: 0
          };
        }
        const p = productStats[sku];
        const fees = (Number(o.shopee_fee)||0) + (Number(o.fixed_fee)||0) + (Number(o.seller_voucher)||0);
+       const orderProfit = (o.sale_price - o.product_cost - fees);
        
        p.qtd += 1;
        p.revenue += Number(o.sale_price);
        p.cost += Number(o.product_cost);
-       p.profit += (o.sale_price - o.product_cost - fees);
+       p.profit += orderProfit;
+       p.fees += fees;
        p.orders.push(o);
+       
+       if (orderProfit < 0) {
+         p.lossOrders.push(o);
+       }
     });
     
     // Cálculo do ticket médio e margem
     Object.values(productStats).forEach(p => {
       p.avgTicket = p.qtd > 0 ? p.revenue / p.qtd : 0;
       p.margin = p.revenue > 0 ? (p.profit / p.revenue) * 100 : 0;
+      p.lossRate = p.qtd > 0 ? (p.lossOrders.length / p.qtd) * 100 : 0;
+      p.avgFees = p.qtd > 0 ? p.fees / p.qtd : 0;
     });
     
     // Análise ABC baseada no faturamento
@@ -186,7 +220,16 @@ export default function App() {
       return { ...p, category };
     });
 
-    return { totalGross, totalCogs, totalFees, totalProfit, margin, dailyChartData, productList: productListWithABC };
+    // Insights avançados
+    const insights = {
+      topProfitable: productListWithABC.filter(p => p.profit > 0).sort((a,b) => b.profit - a.profit).slice(0,5),
+      topLoss: productListWithABC.filter(p => p.profit < 0).sort((a,b) => a.profit - b.profit).slice(0,5),
+      highLossRate: productListWithABC.filter(p => p.lossRate > 20).sort((a,b) => b.lossRate - a.lossRate),
+      lowMargin: productListWithABC.filter(p => p.margin < 10 && p.profit > 0).sort((a,b) => a.margin - b.margin),
+      highFees: productListWithABC.filter(p => p.avgFees > (p.avgTicket * 0.25)).sort((a,b) => b.avgFees - a.avgFees)
+    };
+
+    return { totalGross, totalCogs, totalFees, totalProfit, margin, dailyChartData, productList: productListWithABC, insights };
   }, [orders]);
 
   // --- IMPORTAÇÃO INTELIGENTE ---
@@ -348,6 +391,7 @@ export default function App() {
         <div className="flex gap-4 border-b border-slate-200 mb-8 overflow-x-auto">
            <TabButton active={activeTab==='dashboard'} onClick={()=>setActiveTab('dashboard')} icon={<TrendingUp size={18}/>} label="Visão Geral" />
            <TabButton active={activeTab==='products'} onClick={()=>setActiveTab('products')} icon={<Package size={18}/>} label="Produtos (Técnico)" />
+           <TabButton active={activeTab==='catalog'} onClick={()=>setActiveTab('catalog')} icon={<ShoppingBag size={18}/>} label="Catálogo" />
            <TabButton active={activeTab==='detective'} onClick={()=>setActiveTab('detective')} icon={<Search size={18}/>} label="Detetive Financeiro" />
         </div>
 
@@ -514,6 +558,213 @@ export default function App() {
               </div>
             )}
 
+            {/* === CATÁLOGO DE PRODUTOS COM FILTROS === */}
+            {activeTab === 'catalog' && (
+              <div className="space-y-6 animate-in fade-in">
+                {/* Insights Estratégicos */}
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                  <div className="bg-gradient-to-r from-green-500 to-emerald-600 text-white p-6 rounded-2xl shadow-lg">
+                    <h3 className="font-bold text-lg mb-4 flex items-center gap-2">
+                      <TrendingUp size={20}/> Top Lucrativos
+                    </h3>
+                    <div className="space-y-2">
+                      {analytics.insights.topProfitable.map((product, idx) => (
+                        <div key={idx} className="bg-white/20 backdrop-blur rounded-lg p-3">
+                          <div className="font-bold">{product.sku}</div>
+                          <div className="text-sm opacity-90">Lucro: R$ {product.profit.toFixed(2)}</div>
+                          <div className="text-xs opacity-75">Margem: {product.margin.toFixed(1)}%</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="bg-gradient-to-r from-red-500 to-pink-600 text-white p-6 rounded-2xl shadow-lg">
+                    <h3 className="font-bold text-lg mb-4 flex items-center gap-2">
+                      <AlertCircle size={20}/> Maiores Prejuízos
+                    </h3>
+                    <div className="space-y-2">
+                      {analytics.insights.topLoss.map((product, idx) => (
+                        <div key={idx} className="bg-white/20 backdrop-blur rounded-lg p-3">
+                          <div className="font-bold">{product.sku}</div>
+                          <div className="text-sm opacity-90">Prejuízo: R$ {Math.abs(product.profit).toFixed(2)}</div>
+                          <div className="text-xs opacity-75">Taxa de Perda: {product.lossRate.toFixed(1)}%</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="bg-gradient-to-r from-orange-500 to-yellow-600 text-white p-6 rounded-2xl shadow-lg">
+                    <h3 className="font-bold text-lg mb-4 flex items-center gap-2">
+                      <Search size={20}/> Gargalos Identificados
+                    </h3>
+                    <div className="space-y-2 text-sm">
+                      <div className="bg-white/20 backdrop-blur rounded-lg p-3">
+                        <div className="font-bold">Alta Taxa de Perda</div>
+                        <div className="text-xs opacity-90">{analytics.insights.highLossRate.length} produtos com mais de 20% de perda</div>
+                      </div>
+                      <div className="bg-white/20 backdrop-blur rounded-lg p-3">
+                        <div className="font-bold">Margens Baixas</div>
+                        <div className="text-xs opacity-90">{analytics.insights.lowMargin.length} produtos com menos de 10% margem</div>
+                      </div>
+                      <div className="bg-white/20 backdrop-blur rounded-lg p-3">
+                        <div className="font-bold">Taxas Elevadas</div>
+                        <div className="text-xs opacity-90">{analytics.insights.highFees.length} produtos com taxas acima de 25%</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Filtros Avançados */}
+                <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
+                  <h3 className="font-bold text-slate-700 mb-4">Filtros Avançados</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <div>
+                      <label className="text-xs text-slate-500 uppercase">Buscar SKU</label>
+                      <input
+                        type="text"
+                        value={productFilter}
+                        onChange={(e) => setProductFilter(e.target.value)}
+                        placeholder="Digite o SKU..."
+                        className="w-full border rounded px-3 py-2 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs text-slate-500 uppercase">Categoria ABC</label>
+                      <select
+                        value={categoryFilter}
+                        onChange={(e) => setCategoryFilter(e.target.value)}
+                        className="w-full border rounded px-3 py-2 text-sm"
+                      >
+                        <option value="all">Todas</option>
+                        <option value="A">Categoria A</option>
+                        <option value="B">Categoria B</option>
+                        <option value="C">Categoria C</option>
+                        <option value="D">Categoria D</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-xs text-slate-500 uppercase">Status de Lucro</label>
+                      <select
+                        value={profitFilter}
+                        onChange={(e) => setProfitFilter(e.target.value)}
+                        className="w-full border rounded px-3 py-2 text-sm"
+                      >
+                        <option value="all">Todos</option>
+                        <option value="profit">Lucrativos</option>
+                        <option value="loss">Prejuízo</option>
+                      </select>
+                    </div>
+                    <div className="flex items-end">
+                      <button
+                        onClick={() => {
+                          setProductFilter('');
+                          setCategoryFilter('all');
+                          setProfitFilter('all');
+                        }}
+                        className="w-full bg-slate-200 text-slate-700 px-4 py-2 rounded-lg font-bold hover:bg-slate-300"
+                      >
+                        Limpar Filtros
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Tabela de Produtos com Filtros */}
+                <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                  <div className="p-4 bg-slate-50 border-b border-slate-200">
+                    <h3 className="font-bold text-slate-700">Catálogo de Produtos</h3>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-50 uppercase font-black text-slate-400 border-b border-slate-200">
+                        <tr>
+                          <th className="p-4">SKU</th>
+                          <th className="p-4 text-center">Cat.</th>
+                          <th className="p-4 text-center">Qtd</th>
+                          <th className="p-4 text-right">Faturamento</th>
+                          <th className="p-4 text-right">Custo Total</th>
+                          <th className="p-4 text-right">Taxas Médias</th>
+                          <th className="p-4 text-right">Lucro Total</th>
+                          <th className="p-4 text-right">Margem</th>
+                          <th className="p-4 text-center">% Perda</th>
+                          <th className="p-4 text-center">Ações</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {analytics.productList
+                          .filter(prod => {
+                            if (productFilter && !prod.sku.toLowerCase().includes(productFilter.toLowerCase())) return false;
+                            if (categoryFilter !== 'all' && prod.category !== categoryFilter) return false;
+                            if (profitFilter === 'profit' && prod.profit <= 0) return false;
+                            if (profitFilter === 'loss' && prod.profit >= 0) return false;
+                            return true;
+                          })
+                          .map((prod, idx) => (
+                          <tr key={idx} className="hover:bg-slate-50">
+                              <td className="p-4 font-bold text-slate-700">
+                                <div>{prod.sku}</div>
+                                <div className="text-xs text-slate-500 truncate max-w-xs" title={prod.name}>{prod.name}</div>
+                              </td>
+                              <td className="p-4 text-center">
+                                <span className={`px-2 py-1 rounded font-bold text-xs ${
+                                  prod.category === 'A' ? 'bg-green-100 text-green-700' :
+                                  prod.category === 'B' ? 'bg-yellow-100 text-yellow-700' :
+                                  prod.category === 'C' ? 'bg-orange-100 text-orange-700' :
+                                  'bg-red-100 text-red-700'
+                                }`}>
+                                  {prod.category}
+                                </span>
+                              </td>
+                              <td className="p-4 text-center font-bold">{prod.qtd}</td>
+                              <td className="p-4 text-right font-bold">R$ {prod.revenue.toFixed(2)}</td>
+                              <td className="p-4 text-right text-red-600">R$ {prod.cost.toFixed(2)}</td>
+                              <td className="p-4 text-right text-orange-500">R$ {prod.avgFees.toFixed(2)}</td>
+                              <td className="p-4 text-right font-bold">
+                                <span className={prod.profit > 0 ? 'text-green-600' : 'text-red-600'}>
+                                  R$ {prod.profit.toFixed(2)}
+                                </span>
+                              </td>
+                              <td className="p-4 text-right">
+                                <span className={`px-2 py-1 rounded font-bold ${
+                                  prod.margin > 20 ? 'bg-green-100 text-green-700' :
+                                  prod.margin > 10 ? 'bg-yellow-100 text-yellow-700' :
+                                  'bg-red-100 text-red-700'
+                                }`}>
+                                  {prod.margin.toFixed(1)}%
+                                </span>
+                              </td>
+                              <td className="p-4 text-center">
+                                <span className={`px-2 py-1 rounded font-bold text-xs ${
+                                  prod.lossRate > 20 ? 'bg-red-100 text-red-700' :
+                                  prod.lossRate > 10 ? 'bg-yellow-100 text-yellow-700' :
+                                  'bg-green-100 text-green-700'
+                                }`}>
+                                  {prod.lossRate.toFixed(1)}%
+                                </span>
+                              </td>
+                              <td className="p-4 text-center">
+                                <button 
+                                  onClick={() => setSelectedProduct(prod)}
+                                  className="bg-blue-500 text-white px-3 py-1 rounded text-xs hover:bg-blue-600 mr-1"
+                                >
+                                  Vendas
+                                </button>
+                                <button 
+                                  onClick={() => setEditingProduct(prod.sku)}
+                                  className="bg-orange-500 text-white px-3 py-1 rounded text-xs hover:bg-orange-600"
+                                >
+                                  Editar
+                                </button>
+                              </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* === DETETIVE FINANCEIRO (COMPLETO) === */}
             {activeTab === 'detective' && (
               <div className="space-y-6 animate-in fade-in">
@@ -576,6 +827,93 @@ export default function App() {
                         })}
                       </tbody>
                     </table>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* === MODAL VENDAS DO PRODUTO === */}
+            {selectedProduct && (
+              <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                <div className="bg-white rounded-2xl max-w-6xl w-full max-h-[90vh] overflow-y-auto">
+                  <div className="p-6 border-b border-slate-200 flex justify-between items-center">
+                    <div>
+                      <h3 className="font-bold text-lg text-slate-700">Vendas do Produto</h3>
+                      <p className="text-sm text-slate-500">{selectedProduct.sku} - {selectedProduct.name}</p>
+                    </div>
+                    <button onClick={() => setSelectedProduct(null)} className="text-slate-400 hover:text-slate-600">
+                      <X size={20}/>
+                    </button>
+                  </div>
+                  
+                  {/* Resumo do Produto */}
+                  <div className="p-6 bg-slate-50 border-b">
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                      <div className="text-center">
+                        <div className="text-2xl font-bold text-slate-800">{selectedProduct.qtd}</div>
+                        <div className="text-xs text-slate-500">Vendas Totais</div>
+                      </div>
+                      <div className="text-center">
+                        <div className="text-2xl font-bold text-green-600">R$ {selectedProduct.profit.toFixed(2)}</div>
+                        <div className="text-xs text-slate-500">Lucro Total</div>
+                      </div>
+                      <div className="text-center">
+                        <div className="text-2xl font-bold text-blue-600">{selectedProduct.margin.toFixed(1)}%</div>
+                        <div className="text-xs text-slate-500">Margem Média</div>
+                      </div>
+                      <div className="text-center">
+                        <div className="text-2xl font-bold text-orange-600">{selectedProduct.lossRate.toFixed(1)}%</div>
+                        <div className="text-xs text-slate-500">Taxa de Perda</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Lista de Vendas */}
+                  <div className="p-6">
+                    <h4 className="font-bold text-slate-700 mb-4">Histórico de Vendas</h4>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-xs">
+                        <thead className="bg-slate-50 uppercase font-black text-slate-400 border-b">
+                          <tr>
+                            <th className="p-3">Pedido</th>
+                            <th className="p-3">Data</th>
+                            <th className="p-3 text-right">Venda</th>
+                            <th className="p-3 text-right">Custo</th>
+                            <th className="p-3 text-right">Taxas</th>
+                            <th className="p-3 text-right">Lucro</th>
+                            <th className="p-3 text-center">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {selectedProduct.orders.map((order, idx) => {
+                            const fees = (Number(order.shopee_fee)||0) + (Number(order.fixed_fee)||0) + 
+                                        (Number(order.seller_voucher)||0) + (Number(order.coins_cashback)||0);
+                            const profit = (Number(order.sale_price)||0) - (Number(order.product_cost)||0) - fees;
+                            return (
+                              <tr key={idx} className="hover:bg-slate-50">
+                                <td className="p-3 font-bold text-slate-700">{order.order_id}</td>
+                                <td className="p-3">{new Date(order.creation_date || order.created_at).toLocaleDateString('pt-BR')}</td>
+                                <td className="p-3 text-right font-bold">R$ {Number(order.sale_price).toFixed(2)}</td>
+                                <td className="p-3 text-right text-red-600">R$ {Number(order.product_cost).toFixed(2)}</td>
+                                <td className="p-3 text-right text-orange-500">R$ {fees.toFixed(2)}</td>
+                                <td className="p-3 text-right font-bold">
+                                  <span className={profit >= 0 ? 'text-green-600' : 'text-red-600'}>
+                                    R$ {profit.toFixed(2)}
+                                  </span>
+                                </td>
+                                <td className="p-3 text-center">
+                                  <span className={`px-2 py-1 rounded text-xs font-bold ${
+                                    profit >= 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                                  }`}>
+                                    {profit >= 0 ? 'Lucro' : 'Prejuízo'}
+                                  </span>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                 </div>
               </div>
