@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import Dashboard from './pages/Dashboard';
 import FinancialDetective from './components/FinancialDetective';
-import { Upload, X, Package, Search, TrendingUp, Settings, AlertCircle, CheckCircle } from 'lucide-react';
+import ProductAnalytics from './components/ProductAnalytics';
+import { Upload, X, Package, Search, TrendingUp, AlertCircle, CheckCircle, Calendar, Filter } from 'lucide-react';
 import * as XLSX from 'xlsx';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart, Bar } from 'recharts';
 
 export default function App() {
   const [userId, setUserId] = useState(null);
@@ -14,6 +16,7 @@ export default function App() {
   const [importStatus, setImportStatus] = useState('idle'); // idle, processing, success, error
   const [importMessage, setImportMessage] = useState('');
   const [importSummary, setImportSummary] = useState(null);
+  const [headerRowFound, setHeaderRowFound] = useState(null);
 
   // Autenticação simples
   useEffect(() => {
@@ -25,99 +28,196 @@ export default function App() {
     setUserId(storedId);
   }, []);
 
-  // Processamento inteligente da planilha Shopee com offset
-  const processShopeeSheet = (workbook) => {
-    const sheetName = workbook.SheetNames[0];
-    const worksheet = workbook.Sheets[sheetName];
+  // Detecção dinâmica do cabeçalho "ID do pedido"
+  const findHeaderRow = (worksheet) => {
     const range = XLSX.utils.decode_range(worksheet['!ref']);
+    const maxRow = Math.min(range.e.r, 20); // Limitar às primeiras 20 linhas para performance
     
-    // Encontrar linha do cabeçalho "ID do pedido"
-    let headerRow = -1;
-    for (let row = 0; row <= range.s.r; row += 11) { // Verificar a cada 10 linhas (performance)
-      const cellAddress = XLSX.utils.encode_cell({ r: row, c: 0 });
-      const cellValue = worksheet[cellAddress]?.v;
-      if (cellValue && cellValue.toString().toLowerCase().includes('id do pedido')) {
-        headerRow = row;
-        break;
+    console.log('[DETECÇÃO] Procurando cabeçalho "ID do pedido" nas primeiras 20 linhas...');
+    
+    for (let row = 0; row <= maxRow; row++) {
+      for (let col = 0; col <= range.e.c; col++) {
+        const cellAddress = XLSX.utils.encode_cell({ r: row, c: col });
+        const cellValue = worksheet[cellAddress]?.v;
+        
+        if (cellValue && typeof cellValue === 'string') {
+          const cleanValue = cellValue.toString().trim().toLowerCase();
+          
+          // Verificar padrões exatos e flexíveis
+          if (cleanValue === 'id do pedido' || 
+              cleanValue.includes('id do pedido') ||
+              cleanValue === 'id pedido' ||
+              cleanValue.includes('order id') ||
+              cleanValue.includes('pedido')) {
+            
+            console.log(`[DETECÇÃO] Cabeçalho encontrado na linha ${row + 1}: "${cellValue}"`);
+            setHeaderRowFound(row + 1);
+            return row;
+          }
+        }
       }
     }
     
-    // Se não encontrar, usar linha 11 (padrão Shopee)
-    if (headerRow === -1) {
-      headerRow = 11; // Linha 12 (index 11)
+    // Se não encontrar, usar linha 11 (padrão Shopee Relatórios Financeiros)
+    console.log('[DETECÇÃO] Cabeçalho não encontrado, usando linha 12 (padrão Shopee)');
+    setHeaderRowFound(12);
+    return 11;
+  };
+
+  // Sanitização de nomes de colunas
+  const sanitizeColumnName = (name) => {
+    if (!name) return '';
+    return name.toString()
+      .trim()
+      .replace(/[^\w\s\u00C0-\u017F]/g, '') // Remove caracteres especiais, mantendo acentos
+      .replace(/\s+/g, ' ') // Normaliza espaços
+      .toLowerCase();
+  };
+
+  // Mapeamento preciso de colunas da planilha Shopee (baseado no orders.csv)
+  const mapShopeeColumns = (headers) => {
+    const normalizedHeaders = headers.map(h => sanitizeColumnName(h));
+    
+    console.log('[MAPEAMENTO] Colunas normalizadas:', normalizedHeaders);
+    
+    const mapping = {
+      // Identificação
+      order_id: normalizedHeaders.findIndex(h => 
+        h === 'id do pedido' || h.includes('id do pedido') || h === 'order id'
+      ),
+      
+      // Produto
+      product_name: normalizedHeaders.findIndex(h => 
+        h === 'nome do produto' || h.includes('produto') || h === 'product name'
+      ),
+      sku_variation: normalizedHeaders.findIndex(h => 
+        h === 'número de referência sku' || h.includes('sku') || h === 'sku'
+      ),
+      
+      // Financeiro - Venda
+      sale_price: normalizedHeaders.findIndex(h => 
+        h === 'preço acordado' || h.includes('preço') || h.includes('valor')
+      ),
+      
+      // Financeiro - Taxas Shopee
+      commission_fee: normalizedHeaders.findIndex(h => 
+        h === 'taxa de comissão bruta' || h.includes('comissão') || h.includes('commission')
+      ),
+      service_fee: normalizedHeaders.findIndex(h => 
+        h === 'taxa de serviço bruta' || h.includes('serviço') || h.includes('service')
+      ),
+      transaction_fee: normalizedHeaders.findIndex(h => 
+        h === 'taxa de transação' || h.includes('transação') || h.includes('transaction')
+      ),
+      
+      // Financeiro - Marketing Vendedor
+      seller_voucher: normalizedHeaders.findIndex(h => 
+        h === 'cupom do vendedor' || h.includes('cupom do vendedor') || h.includes('seller voucher')
+      ),
+      seller_coin_cashback: normalizedHeaders.findIndex(h => 
+        h === 'seller absorbed coin cashback' || 
+        h === 'compensar moedas shopee' || 
+        h.includes('coin') || h.includes('moedas')
+      ),
+      
+      // Financeiro - Logística
+      reverse_shipping_fee: normalizedHeaders.findIndex(h => 
+        h === 'taxa de envio reversa' || h.includes('envio reversa') || h.includes('reverse')
+      ),
+      
+      // Datas
+      created_at_platform: normalizedHeaders.findIndex(h => 
+        h === 'data de criação do pedido' || h.includes('criação') || h.includes('created')
+      ),
+      paid_at: normalizedHeaders.findIndex(h => 
+        h === 'hora do pagamento do pedido' || h.includes('pagamento') || h.includes('paid')
+      ),
+      
+      // Status
+      status: normalizedHeaders.findIndex(h => 
+        h === 'status do pedido' || h.includes('status') || h === 'order status'
+      )
+    };
+
+    console.log('[MAPEAMENTO] Índices das colunas:', mapping);
+    
+    // Validação crítica
+    if (mapping.order_id === -1) {
+      throw new Error('Coluna "ID do pedido" não encontrada. Verifique se esta é uma planilha exportada da Shopee.');
     }
     
-    console.log(`[SHOPEE] Cabeçalho encontrado na linha ${headerRow + 1}`);
-    
-    // Converter para JSON começando da linha do cabeçalho
-    const jsonData = XLSX.utils.sheet_to_json(worksheet, {
-      range: headerRow,
-      header: 1,
-      defval: ''
-    });
-    
-    return jsonData;
+    if (mapping.sale_price === -1) {
+      throw new Error('Coluna "Preço acordado" não encontrada. Verifique se esta é uma planilha completa da Shopee.');
+    }
+
+    return mapping;
   };
 
-  // Mapeamento preciso de colunas da planilha Shopee
-  const mapShopeeColumns = (headers) => {
-    const normalizedHeaders = headers.map(h => h?.toString().toLowerCase().trim());
+  // Tratamento robusto de datas
+  const parseDate = (value) => {
+    if (!value) return null;
     
-    return {
-      order_id: normalizedHeaders.findIndex(h => h === 'id do pedido'),
-      product_name: normalizedHeaders.findIndex(h => h === 'nome do produto'),
-      sku: normalizedHeaders.findIndex(h => h === 'número de referência sku'),
-      sku_main: normalizedHeaders.findIndex(h => h === 'nº de referência do sku principal'),
-      sale_price: normalizedHeaders.findIndex(h => h === 'valor total'),
-      status: normalizedHeaders.findIndex(h => h === 'status do pedido'),
-      creation_date: normalizedHeaders.findIndex(h => h === 'data de criação do pedido'),
+    try {
+      // 1. Excel Serial Date (números)
+      if (typeof value === 'number') {
+        const date = new Date(Math.round((value - 25569) * 86400 * 1000));
+        return isNaN(date) ? null : date.toISOString();
+      }
       
-      // Taxas Shopee (precisão cirúrgica)
-      commission_fee: normalizedHeaders.findIndex(h => h.includes('comissão')),
-      service_fee: normalizedHeaders.findIndex(h => h.includes('serviço')),
-      transaction_fee: normalizedHeaders.findIndex(h => h.includes('transação')),
+      // 2. String formatos conhecidos
+      const dateStr = value.toString().trim();
       
-      // Marketing Vendedor
-      seller_voucher: normalizedHeaders.findIndex(h => h === 'cupom do vendedor'),
-      shopee_voucher: normalizedHeaders.findIndex(h => h === 'cupom shopee'),
-      coins_cashback: normalizedHeaders.findIndex(h => h.includes('moedas') || h.includes('coin')),
+      // YYYY-MM-DD
+      if (dateStr.match(/^\d{4}-\d{2}-\d{2}$/)) {
+        return new Date(dateStr).toISOString();
+      }
       
-      // Custos de Envio
-      reverse_shipping_fee: normalizedHeaders.findIndex(h => h.includes('envio reversa')),
-      shipping_cost: normalizedHeaders.findIndex(h => h.includes('frete')),
+      // DD/MM/YYYY ou DD/MM/YY
+      if (dateStr.match(/^\d{2}\/\d{2}\/\d{2,4}$/)) {
+        const parts = dateStr.split('/');
+        const year = parts[2].length === 2 ? 2000 + parseInt(parts[2]) : parseInt(parts[2]);
+        const month = parseInt(parts[1]) - 1;
+        const day = parseInt(parts[0]);
+        const date = new Date(year, month, day);
+        return isNaN(date) ? null : date.toISOString();
+      }
       
-      // Valor Líquido (para conciliação)
-      net_payout: normalizedHeaders.findIndex(h => h.includes('valor receber') || h.includes('repasse'))
-    };
+      // DD-MM-YYYY ou DD-MM-YY
+      if (dateStr.match(/^\d{2}-\d{2}-\d{2,4}$/)) {
+        const parts = dateStr.split('-');
+        const year = parts[2].length === 2 ? 2000 + parseInt(parts[2]) : parseInt(parts[2]);
+        const month = parseInt(parts[1]) - 1;
+        const day = parseInt(parts[0]);
+        const date = new Date(year, month, day);
+        return isNaN(date) ? null : date.toISOString();
+      }
+      
+      // Tentar parse genérico
+      const date = new Date(dateStr);
+      return isNaN(date) ? null : date.toISOString();
+      
+    } catch (error) {
+      console.warn('[DATA] Erro ao parsear data:', value, error);
+      return null;
+    }
   };
 
-  // Processamento de importação com precisão cirúrgica
-  const processImportData = (data) => {
+  // Processamento de importação com precisão empresarial
+  const processImportData = (data, headerRow) => {
     if (!data?.length || data.length < 2) {
       setImportStatus('error');
       setImportMessage('Planilha vazia ou formato inválido. Verifique se a planilha contém dados.');
       return;
     }
 
-    const headers = data[0];
+    // Usar apenas os dados a partir da linha do cabeçalho
+    const relevantData = data.slice(headerRow);
+    const headers = relevantData[0];
     const columns = mapShopeeColumns(headers);
-    
-    // Validação crítica
-    if (columns.order_id === -1) {
-      setImportStatus('error');
-      setImportMessage('Coluna "ID do pedido" não encontrada. Verifique se esta é uma planilha exportada da Shopee.');
-      return;
-    }
 
-    if (columns.sale_price === -1) {
-      setImportStatus('error');
-      setImportMessage('Coluna "Valor total" não encontrada. Verifique se esta é uma planilha completa da Shopee.');
-      return;
-    }
+    console.log('[PROCESSAMENTO] Iniciando processamento com', relevantData.length - 1, 'linhas de dados');
 
-    console.log('[SHOPEE] Mapeamento de colunas:', columns);
-
-    const processed = data.slice(1).map((row, index) => {
+    const processed = relevantData.slice(1).map((row, index) => {
       if (!row[columns.order_id]) return null;
 
       try {
@@ -133,72 +233,56 @@ export default function App() {
           return parseFloat(cleanValue) || 0;
         };
 
-        const parseDate = (value) => {
-          if (!value) return null;
-          if (typeof value === 'number') {
-            return new Date(Math.round((value - 25569) * 86400 * 1000)).toISOString();
-          }
-          const date = new Date(value);
-          return isNaN(date) ? null : date.toISOString();
-        };
-
         // Extrair dados financeiros com precisão
         const salePrice = parseMoney(row[columns.sale_price]);
         const commissionFee = parseMoney(row[columns.commission_fee]);
         const serviceFee = parseMoney(row[columns.service_fee]);
         const transactionFee = parseMoney(row[columns.transaction_fee]);
         const sellerVoucher = parseMoney(row[columns.seller_voucher]);
-        const shopeeVoucher = parseMoney(row[columns.shopee_voucher]);
-        const coinsCashback = parseMoney(row[columns.coins_cashback]);
+        const sellerCoinCashback = parseMoney(row[columns.seller_coin_cashback]);
         const reverseShippingFee = parseMoney(row[columns.reverse_shipping_fee]);
-        const shippingCost = parseMoney(row[columns.shipping_cost]);
-        const netPayout = parseMoney(row[columns.net_payout]);
 
-        // Calcular total de taxas
-        const totalFees = commissionFee + serviceFee + transactionFee + 
-                         sellerVoucher + shopeeVoucher + coinsCashback + 
-                         reverseShippingFee + shippingCost;
-
-        // Validar valor líquido
-        const calculatedNetPayout = salePrice - totalFees;
-        if (netPayout > 0 && Math.abs(netPayout - calculatedNetPayout) > 0.01) {
-          console.warn(`[SHOPEE] Divergência no pedido ${row[columns.order_id]}: Net Payout informado=${netPayout}, calculado=${calculatedNetPayout}`);
+        // Validação de valor mínimo
+        if (salePrice <= 0) {
+          console.warn(`[PROCESSAMENTO] Ignorando pedido ${row[columns.order_id]} com valor zero ou negativo`);
+          return null;
         }
 
         // SKU do produto
-        let sku = row[columns.sku] || row[columns.sku_main] || 'SEM SKU';
+        let sku = row[columns.sku_variation] || 'SEM SKU';
         sku = sku.toString().trim().toUpperCase().replace(/\s/g, '');
 
         return {
           order_id: row[columns.order_id],
           product_name: row[columns.product_name] || 'Produto não identificado',
-          sku: sku,
+          sku_variation: sku,
           sale_price: salePrice,
           status: row[columns.status] || 'Concluído',
-          creation_date: parseDate(row[columns.creation_date]),
+          created_at_platform: parseDate(row[columns.created_at_platform]),
+          paid_at: parseDate(row[columns.paid_at]),
           
-          // Dados financeiros precisos
+          // Taxas Shopee (precisão contábil)
           commission_fee: commissionFee,
           service_fee: serviceFee,
           transaction_fee: transactionFee,
+          
+          // Marketing Vendedor
           seller_voucher: sellerVoucher,
-          shopee_voucher: shopeeVoucher,
-          coins_cashback: coinsCashback,
+          seller_coin_cashback: sellerCoinCashback,
+          
+          // Logística Reversa
           reverse_shipping_fee: reverseShippingFee,
-          shipping_cost: shippingCost,
-          net_payout: netPayout || calculatedNetPayout,
-          total_fees: totalFees,
           
           quantity: 1,
           raw_data: row // Manter dados brutos para auditoria
         };
       } catch (error) {
-        console.error(`[SHOPEE] Erro processando linha ${index + 2}:`, error);
+        console.error(`[PROCESSAMENTO] Erro processando linha ${headerRow + index + 2}:`, error);
         return null;
       }
     }).filter(Boolean);
 
-    console.log(`[SHOPEE] Processados ${processed.length} pedidos válidos de ${data.length - 1} linhas`);
+    console.log(`[PROCESSAMENTO] Processados ${processed.length} pedidos válidos de ${relevantData.length - 1} linhas`);
 
     if (processed.length === 0) {
       setImportStatus('error');
@@ -208,27 +292,33 @@ export default function App() {
 
     setProcessedData(processed);
     setImportStatus('success');
-    setImportMessage(`${processed.length} pedidos processados com sucesso!`);
+    setImportMessage(`✅ ${processed.length} pedidos processados com sucesso! (Cabeçalho: Linha ${headerRow + 1})`);
     
-    // Estatísticas
+    // Estatísticas detalhadas
     const totalRevenue = processed.reduce((sum, o) => sum + o.sale_price, 0);
-    const totalFees = processed.reduce((sum, o) => sum + o.total_fees, 0);
-    const totalNet = processed.reduce((sum, o) => sum + o.net_payout, 0);
+    const totalFees = processed.reduce((sum, o) => sum + 
+      (o.commission_fee || 0) + (o.service_fee || 0) + (o.transaction_fee || 0) +
+      (o.seller_voucher || 0) + (o.seller_coin_cashback || 0) + (o.reverse_shipping_fee || 0), 0);
     
     setImportSummary({
       total_orders: processed.length,
+      header_row: headerRow + 1,
       gross_revenue: totalRevenue,
       total_fees: totalFees,
-      net_payout: totalNet,
+      net_payout: totalRevenue - totalFees,
       avg_ticket: totalRevenue / processed.length,
       date_range: {
-        start: processed.reduce((min, o) => o.creation_date && o.creation_date < min ? o.creation_date : min, processed[0]?.creation_date),
-        end: processed.reduce((max, o) => o.creation_date && o.creation_date > max ? o.creation_date : max, processed[0]?.creation_date)
-      }
+        start: processed.reduce((min, o) => o.created_at_platform && o.created_at_platform < min ? o.created_at_platform : min, processed[0]?.created_at_platform),
+        end: processed.reduce((max, o) => o.created_at_platform && o.created_at_platform > max ? o.created_at_platform : max, processed[0]?.created_at_platform)
+      },
+      status_breakdown: processed.reduce((acc, o) => {
+        acc[o.status] = (acc[o.status] || 0) + 1;
+        return acc;
+      }, {})
     });
   };
 
-  // Upload de arquivo com processamento inteligente
+  // Upload de arquivo com detecção blindada
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -241,7 +331,8 @@ export default function App() {
     }
 
     setImportStatus('processing');
-    setImportMessage('Processando planilha...');
+    setImportMessage('Analisando estrutura da planilha...');
+    setHeaderRowFound(null);
 
     const reader = new FileReader();
     reader.onload = (evt) => {
@@ -249,13 +340,28 @@ export default function App() {
         const binaryStr = evt.target.result;
         const workbook = XLSX.read(binaryStr, { type: 'binary' });
         
-        // Processar planilha Shopee com offset inteligente
-        const jsonData = processShopeeSheet(workbook);
-        processImportData(jsonData);
+        setImportMessage('Detectando cabeçalho...');
+        
+        // Detecção dinâmica do cabeçalho
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        const headerRow = findHeaderRow(worksheet);
+        
+        setImportMessage('Processando dados...');
+        
+        // Converter para JSON começando da linha do cabeçalho
+        const jsonData = XLSX.utils.sheet_to_json(worksheet, {
+          range: headerRow,
+          header: 1,
+          defval: ''
+        });
+        
+        processImportData(jsonData, 0); // headerRow já aplicado no range
+        
       } catch (error) {
         console.error('[UPLOAD] Erro processando arquivo:', error);
         setImportStatus('error');
-        setImportMessage('Erro ao processar o arquivo. Verifique se não está corrompido.');
+        setImportMessage('Erro ao processar o arquivo: ' + error.message);
       }
     };
     reader.onerror = () => {
@@ -301,6 +407,10 @@ export default function App() {
         if (result.summary.failed > 0) {
           setImportMessage(prev => prev + ` ⚠️ ${result.summary.failed} pedidos com erros.`);
         }
+        
+        if (result.summary.duplicates > 0) {
+          setImportMessage(prev => prev + ` ℹ️ ${result.summary.duplicates} pedidos duplicados ignorados.`);
+        }
 
         setImportSummary(result.summary);
         
@@ -340,7 +450,7 @@ export default function App() {
       <div className="flex items-center justify-center h-screen bg-gray-50">
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-orange-500 mx-auto"></div>
-          <p className="mt-4 text-gray-600">Carregando ShopeeFlow...</p>
+          <p className="mt-4 text-gray-600">Carregando ShopeeFlow Enterprise...</p>
         </div>
       </div>
     );
@@ -356,9 +466,12 @@ export default function App() {
               <div className="bg-orange-500 p-2 rounded-lg text-white mr-3">
                 <TrendingUp size={20} />
               </div>
-              <h1 className="text-xl font-bold text-gray-900">
-                ShopeeFlow <span className="text-orange-500">PRO</span>
-              </h1>
+              <div>
+                <h1 className="text-xl font-bold text-gray-900">
+                  ShopeeFlow <span className="text-orange-500">Enterprise</span>
+                </h1>
+                <p className="text-xs text-gray-500">CRM Empresarial com Inteligência de Produtos</p>
+              </div>
             </div>
             
             <div className="flex items-center gap-4">
@@ -433,26 +546,20 @@ export default function App() {
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {activeTab === 'dashboard' && <Dashboard userId={userId} />}
-        {activeTab === 'products' && (
-          <div className="text-center py-12">
-            <Package className="mx-auto h-12 w-12 text-gray-400" />
-            <h3 className="mt-2 text-sm font-medium text-gray-900">Módulo de Produtos</h3>
-            <p className="mt-1 text-sm text-gray-500">Em desenvolvimento...</p>
-          </div>
-        )}
+        {activeTab === 'products' && <ProductAnalytics userId={userId} />}
         {activeTab === 'detective' && <FinancialDetective userId={userId} />}
       </main>
 
-      {/* Import Modal - Profissional */}
+      {/* Import Modal - Enterprise */}
       {showUploadModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg w-full max-w-4xl mx-4 max-h-[90vh] overflow-y-auto">
+          <div className="bg-white rounded-lg w-full max-w-5xl mx-4 max-h-[90vh] overflow-y-auto">
             <div className="p-6 border-b">
               <div className="flex justify-between items-center">
                 <div>
-                  <h2 className="text-xl font-bold text-gray-900">Importação Inteligente Shopee</h2>
+                  <h2 className="text-xl font-bold text-gray-900">Importação Enterprise Shopee</h2>
                   <p className="text-gray-600 mt-1">
-                    Processamento automático com detecção de cabeçalho e cálculos precisos
+                    Detecção automática de estrutura com precisão contábil
                   </p>
                 </div>
                 <button 
@@ -469,14 +576,16 @@ export default function App() {
               <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center">
                 <Upload className="mx-auto h-12 w-12 text-gray-400 mb-4" />
                 <h3 className="text-lg font-medium text-gray-900 mb-2">
-                  Planilha da Shopee
+                  Planilha Shopee (Order.all...xlsx)
                 </h3>
                 <p className="text-gray-600 mb-4">
                   Arraste a planilha ou clique para selecionar (.xlsx ou .xls)
                 </p>
-                <p className="text-sm text-gray-500 mb-4">
-                  O sistema detectará automaticamente o cabeçalho "ID do pedido"
-                </p>
+                <div className="text-sm text-gray-500 space-y-1">
+                  <p>• Detecção automática: "Order.all" (Linha 0) ou "Relatórios Financeiros" (Linha 12)</p>
+                  <p>• Mapeamento preciso: Preço acordado, Taxas, Cupons, Envio Reverso</p>
+                  <p>• Tratamento de datas: Excel Serial, YYYY-MM-DD, DD/MM/YYYY</p>
+                </div>
                 <input
                   type="file"
                   accept=".xlsx,.xls"
@@ -487,7 +596,7 @@ export default function App() {
                 />
                 <label 
                   htmlFor="file-upload"
-                  className="bg-orange-500 hover:bg-orange-600 disabled:bg-gray-400 text-white px-6 py-3 rounded-lg cursor-pointer inline-block transition-colors"
+                  className="bg-orange-500 hover:bg-orange-600 disabled:bg-gray-400 text-white px-6 py-3 rounded-lg cursor-pointer inline-block transition-colors mt-4"
                 >
                   Selecionar Planilha
                 </label>
@@ -505,30 +614,81 @@ export default function App() {
                   {importStatus === 'processing' && (
                     <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-600 mr-2"></div>
                   )}
-                  <span className="font-medium">{importMessage}</span>
+                  <div>
+                    <span className="font-medium">{importMessage}</span>
+                    {headerRowFound && (
+                      <p className="text-sm mt-1">Cabeçalho detectado na linha {headerRowFound}</p>
+                    )}
+                  </div>
                 </div>
               )}
 
-              {/* Import Summary */}
+              {/* Import Summary Enterprise */}
               {importSummary && (
                 <div className="mt-6 bg-gray-50 rounded-lg p-6">
                   <h4 className="font-semibold text-gray-900 mb-4">Resumo da Importação</h4>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    <div>
+                  
+                  {/* KPIs Principais */}
+                  <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+                    <div className="text-center">
                       <p className="text-sm text-gray-600">Pedidos</p>
                       <p className="text-lg font-bold">{importSummary.total_orders}</p>
                     </div>
-                    <div>
+                    <div className="text-center">
                       <p className="text-sm text-gray-600">Faturamento</p>
                       <p className="text-lg font-bold">R$ {importSummary.gross_revenue?.toFixed(2)}</p>
                     </div>
-                    <div>
+                    <div className="text-center">
                       <p className="text-sm text-gray-600">Taxas</p>
-                      <p className="text-lg font-bold">R$ {importSummary.total_fees?.toFixed(2)}</p>
+                      <p className="text-lg font-bold text-red-600">R$ {importSummary.total_fees?.toFixed(2)}</p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-sm text-gray-600">Líquido</p>
+                      <p className="text-lg font-bold text-green-600">R$ {importSummary.net_payout?.toFixed(2)}</p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-sm text-gray-600">Ticket Médio</p>
+                      <p className="text-lg font-bold">R$ {importSummary.avg_ticket?.toFixed(2)}</p>
+                    </div>
+                  </div>
+
+                  {/* Gráfico de Status */}
+                  {importSummary.status_breakdown && (
+                    <div className="mb-6">
+                      <h5 className="font-medium text-gray-900 mb-3">Distribuição por Status</h5>
+                      <ResponsiveContainer width="100%" height={200}>
+                        <BarChart data={Object.entries(importSummary.status_breakdown).map(([status, count]) => ({
+                          status,
+                          count
+                        }))}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="status" />
+                          <YAxis />
+                          <Tooltip />
+                          <Bar dataKey="count" fill="#f97316" />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+
+                  {/* Informações Adicionais */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                    <div>
+                      <span className="text-gray-600">Linha do Cabeçalho:</span>
+                      <span className="ml-2 font-medium">{importSummary.header_row}</span>
                     </div>
                     <div>
-                      <p className="text-sm text-gray-600">Líquido</p>
-                      <p className="text-lg font-bold">R$ {importSummary.net_payout?.toFixed(2)}</p>
+                      <span className="text-gray-600">Período:</span>
+                      <span className="ml-2 font-medium">
+                        {importSummary.date_range?.start ? 
+                          new Date(importSummary.date_range.start).toLocaleDateString('pt-BR') : 
+                          'N/A'
+                        } a {
+                          importSummary.date_range?.end ? 
+                          new Date(importSummary.date_range.end).toLocaleDateString('pt-BR') : 
+                          'N/A'
+                        }
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -548,6 +708,7 @@ export default function App() {
                           setImportStatus('idle');
                           setImportMessage('');
                           setImportSummary(null);
+                          setHeaderRowFound(null);
                         }}
                         className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-4 py-2 rounded-lg transition-colors"
                         disabled={isProcessing}
@@ -573,33 +734,50 @@ export default function App() {
                         <tr>
                           <th className="text-left p-2">Pedido</th>
                           <th className="text-left p-2">Produto</th>
+                          <th className="text-left p-2">SKU</th>
                           <th className="text-right p-2">Valor</th>
                           <th className="text-right p-2">Taxas</th>
                           <th className="text-right p-2">Líquido</th>
                           <th className="text-left p-2">Status</th>
+                          <th className="text-left p-2">Data</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {processedData.slice(0, 20).map((row, idx) => (
-                          <tr key={idx} className="border-b hover:bg-white">
-                            <td className="p-2 font-mono text-xs">{row.order_id}</td>
-                            <td className="p-2 truncate max-w-xs" title={row.product_name}>
-                              {row.product_name}
-                            </td>
-                            <td className="p-2 text-right font-medium">R$ {row.sale_price.toFixed(2)}</td>
-                            <td className="p-2 text-right text-red-600">-R$ {row.total_fees.toFixed(2)}</td>
-                            <td className="p-2 text-right font-medium text-green-600">R$ {row.net_payout.toFixed(2)}</td>
-                            <td className="p-2">
-                              <span className={`px-2 py-1 rounded text-xs ${
-                                row.status.includes('Concluído') ? 'bg-green-100 text-green-800' :
-                                row.status.includes('Cancelado') ? 'bg-red-100 text-red-800' :
-                                'bg-yellow-100 text-yellow-800'
-                              }`}>
-                                {row.status}
-                              </span>
-                            </td>
-                          </tr>
-                        ))}
+                        {processedData.slice(0, 20).map((row, idx) => {
+                          const totalFees = (row.commission_fee || 0) + (row.service_fee || 0) + 
+                                           (row.transaction_fee || 0) + (row.seller_voucher || 0) + 
+                                           (row.seller_coin_cashback || 0) + (row.reverse_shipping_fee || 0);
+                          const netPayout = row.sale_price - totalFees;
+                          
+                          return (
+                            <tr key={idx} className="border-b hover:bg-white">
+                              <td className="p-2 font-mono text-xs">{row.order_id}</td>
+                              <td className="p-2 truncate max-w-xs" title={row.product_name}>
+                                {row.product_name}
+                              </td>
+                              <td className="p-2 font-mono text-xs">{row.sku_variation}</td>
+                              <td className="p-2 text-right font-medium">R$ {row.sale_price.toFixed(2)}</td>
+                              <td className="p-2 text-right text-red-600">-R$ {totalFees.toFixed(2)}</td>
+                              <td className="p-2 text-right font-medium text-green-600">R$ {netPayout.toFixed(2)}</td>
+                              <td className="p-2">
+                                <span className={`px-2 py-1 rounded text-xs ${
+                                  row.status.includes('Concluído') ? 'bg-green-100 text-green-800' :
+                                  row.status.includes('Cancelado') ? 'bg-red-100 text-red-800' :
+                                  row.status.includes('Devolução') ? 'bg-orange-100 text-orange-800' :
+                                  'bg-yellow-100 text-yellow-800'
+                                }`}>
+                                  {row.status}
+                                </span>
+                              </td>
+                              <td className="p-2 text-xs">
+                                {row.created_at_platform ? 
+                                  new Date(row.created_at_platform).toLocaleDateString('pt-BR') : 
+                                  'N/A'
+                                }
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                     {processedData.length > 20 && (
