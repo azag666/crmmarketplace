@@ -1,12 +1,8 @@
-import { neon } from '@neondatabase/serverless';
-
-// Configuração do banco de dados
-const sql = neon(process.env.NEXT_PUBLIC_DATABASE_URL);
-
-// Serviço de API com tratamento de erros robusto
+// Serviço de API com fallback para desenvolvimento
 export class ShopeeFlowAPI {
   constructor() {
     this.baseURL = '/api';
+    this.isDevelopment = !process.env.DATABASE_URL;
   }
 
   // Tratamento de erros padrão
@@ -15,59 +11,80 @@ export class ShopeeFlowAPI {
     throw new Error(`Falha na operação: ${context}. ${error.message || 'Tente novamente.'}`);
   }
 
+  // Dados mock para desenvolvimento
+  getMockData(type, filters = {}) {
+    const mockData = {
+      orders: [],
+      products: [],
+      summary: {
+        total_orders: 0,
+        completed_orders: 0,
+        cancelled_orders: 0,
+        to_ship_orders: 0,
+        shipped_orders: 0,
+        paid_orders: 0,
+        delivered_orders: 0,
+        gross_revenue: 0,
+        net_revenue: 0,
+        total_cost: 0,
+        total_fees: 0,
+        gross_profit: 0,
+        avg_ticket: 0,
+        profit_margin: 0,
+        total_loss: 0,
+        total_profit: 0,
+        loss_orders: 0,
+        profit_orders: 0
+      },
+      cashFlow: [],
+      lossAnalysis: [],
+      settings: {
+        target_margin: 20.00,
+        default_shipping_cost: 15.00,
+        shopee_fee_rate: 20.00,
+        currency: 'BRL',
+        timezone: 'America/Sao_Paulo'
+      }
+    };
+
+    console.log(`[Mock Mode] ${type}: Retornando dados mock`);
+    return mockData[type] || [];
+  }
+
   // ===== PEDIDOS =====
   
   // Buscar pedidos com filtros avançados
   async getOrders(userId, filters = {}) {
+    if (this.isDevelopment) {
+      return this.getMockData('orders');
+    }
+
     try {
-      const { startDate, endDate, status, sku } = filters;
-      
-      let query = `
-        SELECT 
-          o.*,
-          p.name as product_name,
-          p.image_url,
-          p.category,
-          CASE 
-            WHEN o.status = 'Completed' THEN 'Concluído'
-            WHEN o.status = 'Cancelled' THEN 'Cancelado'
-            WHEN o.status = 'To Ship' THEN 'A Enviar'
-            WHEN o.status = 'Shipped' THEN 'Enviado'
-            WHEN o.status = 'Ready to Ship' THEN 'Pronto para Enviar'
-            ELSE o.status
-          END as status_display
-        FROM orders o
-        LEFT JOIN products p ON o.sku = p.sku
-        WHERE o.user_id = $1
-      `;
-      
-      const params = [userId];
-      let paramIndex = 2;
-      
-      if (startDate && endDate) {
-        query += ` AND o.creation_date >= $${paramIndex} AND o.creation_date <= $${paramIndex + 1}`;
-        params.push(startDate, endDate);
-        paramIndex += 2;
-      }
-      
-      if (status) {
-        query += ` AND o.status = $${paramIndex}`;
-        params.push(status);
-        paramIndex += 1;
-      }
-      
-      if (sku) {
-        query += ` AND o.sku ILIKE $${paramIndex}`;
-        params.push(`%${sku}%`);
-        paramIndex += 1;
-      }
-      
-      query += ` ORDER BY o.creation_date DESC`;
-      
-      const orders = await sql(query, ...params);
-      return orders;
+      const response = await fetch(`${this.baseURL}/orders?userId=${userId}&${new URLSearchParams(filters)}`);
+      if (!response.ok) throw new Error('Failed to fetch orders');
+      return await response.json();
     } catch (error) {
       this.handleError(error, 'buscar pedidos');
+    }
+  }
+
+  // Importar pedidos em lote
+  async importOrders(userId, orders) {
+    if (this.isDevelopment) {
+      console.log('[Mock Mode] Importando pedidos:', orders.length);
+      return { success: true, imported: orders.length };
+    }
+
+    try {
+      const response = await fetch(`${this.baseURL}/orders`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, orders })
+      });
+      if (!response.ok) throw new Error('Failed to import orders');
+      return await response.json();
+    } catch (error) {
+      this.handleError(error, 'importar pedidos');
     }
   }
 
@@ -75,27 +92,14 @@ export class ShopeeFlowAPI {
   
   // Buscar produtos
   async getProducts(userId) {
+    if (this.isDevelopment) {
+      return this.getMockData('products');
+    }
+
     try {
-      const products = await sql`
-        SELECT 
-          p.*,
-          -- Último custo
-          (SELECT cost FROM product_costs_history 
-           WHERE sku = p.sku AND valid_to IS NULL 
-           ORDER BY valid_from DESC LIMIT 1) as current_cost,
-          -- Estatísticas de vendas
-          (SELECT COUNT(*) FROM orders o 
-           WHERE o.sku = p.sku AND o.user_id = p.user_id) as total_orders,
-          (SELECT SUM(o.quantity) FROM orders o 
-           WHERE o.sku = p.sku AND o.user_id = p.user_id) as total_sold,
-          (SELECT SUM(o.gross_profit) FROM orders o 
-           WHERE o.sku = p.sku AND o.user_id = p.user_id) as total_profit
-        FROM products p
-        WHERE p.user_id = $1
-        ORDER BY p.name
-      `;
-      
-      return products;
+      const response = await fetch(`${this.baseURL}/products?userId=${userId}`);
+      if (!response.ok) throw new Error('Failed to fetch products');
+      return await response.json();
     } catch (error) {
       this.handleError(error, 'buscar produtos');
     }
@@ -105,44 +109,15 @@ export class ShopeeFlowAPI {
   
   // Obter resumo financeiro
   async getFinancialSummary(userId, filters = {}) {
+    if (this.isDevelopment) {
+      return this.getMockData('summary');
+    }
+
     try {
-      const { startDate, endDate } = filters;
-      
-      let dateFilter = '';
-      if (startDate && endDate) {
-        dateFilter = `AND creation_date >= '${startDate}' AND creation_date <= '${endDate}'`;
-      }
-      
-      const summary = await sql(`
-        SELECT 
-          COUNT(*) as total_orders,
-          COUNT(CASE WHEN status = 'Completed' THEN 1 END) as completed_orders,
-          COUNT(CASE WHEN status = 'Cancelled' THEN 1 END) as cancelled_orders,
-          COUNT(CASE WHEN status = 'To Ship' THEN 1 END) as to_ship_orders,
-          COUNT(CASE WHEN status = 'Shipped' THEN 1 END) as shipped_orders,
-          COUNT(CASE WHEN paid_at IS NOT NULL THEN 1 END) as paid_orders,
-          COUNT(CASE WHEN completed_at IS NOT NULL THEN 1 END) as delivered_orders,
-          
-          SUM(sale_price) as gross_revenue,
-          SUM(net_revenue) as net_revenue,
-          SUM(product_cost) as total_cost,
-          SUM(total_fees) as total_fees,
-          SUM(gross_profit) as gross_profit,
-          
-          AVG(sale_price) as avg_ticket,
-          SUM(gross_profit) / NULLIF(SUM(net_revenue), 0) * 100 as profit_margin,
-          
-          SUM(CASE WHEN gross_profit < 0 THEN gross_profit ELSE 0 END) as total_loss,
-          SUM(CASE WHEN gross_profit >= 0 THEN gross_profit ELSE 0 END) as total_profit,
-          
-          COUNT(CASE WHEN gross_profit < 0 THEN 1 END) as loss_orders,
-          COUNT(CASE WHEN gross_profit >= 0 THEN 1 END) as profit_orders
-          
-        FROM orders 
-        WHERE user_id = $1 ${dateFilter}
-      `, userId);
-      
-      return summary[0] || {};
+      const response = await fetch(`${this.baseURL}/summary?userId=${userId}&${new URLSearchParams(filters)}`);
+      if (!response.ok) throw new Error('Failed to fetch summary');
+      const data = await response.json();
+      return data[0] || this.getMockData('summary');
     } catch (error) {
       this.handleError(error, 'buscar resumo financeiro');
     }
@@ -150,43 +125,14 @@ export class ShopeeFlowAPI {
 
   // Detetive Financeiro - Análise de perdas
   async getLossAnalysis(userId, filters = {}) {
+    if (this.isDevelopment) {
+      return this.getMockData('lossAnalysis');
+    }
+
     try {
-      const { startDate, endDate } = filters;
-      
-      let dateFilter = '';
-      if (startDate && endDate) {
-        dateFilter = `AND creation_date >= '${startDate}' AND creation_date <= '${endDate}'`;
-      }
-      
-      const analysis = await sql(`
-        SELECT 
-          o.order_id,
-          o.sku,
-          o.product_name,
-          o.sale_price,
-          o.product_cost,
-          o.total_fees,
-          o.gross_profit,
-          o.seller_voucher,
-          o.shopee_fee,
-          o.coins_cashback,
-          o.creation_date,
-          p.category,
-          CASE 
-            WHEN o.gross_profit < 0 THEN 'Prejuízo'
-            WHEN o.gross_profit = 0 THEN 'Zerado'
-            ELSE 'Lucro'
-          END as profit_status
-        FROM orders o
-        LEFT JOIN products p ON o.sku = p.sku
-        WHERE o.user_id = $1 
-          AND o.gross_profit < 0 
-          ${dateFilter}
-        ORDER BY o.gross_profit ASC
-        LIMIT 100
-      `, userId);
-      
-      return analysis;
+      const response = await fetch(`${this.baseURL}/loss-analysis?userId=${userId}&${new URLSearchParams(filters)}`);
+      if (!response.ok) throw new Error('Failed to fetch loss analysis');
+      return await response.json();
     } catch (error) {
       this.handleError(error, 'análise de perdas');
     }
@@ -196,29 +142,14 @@ export class ShopeeFlowAPI {
   
   // Dados para o fluxo de caixa
   async getCashFlowData(userId, filters = {}) {
+    if (this.isDevelopment) {
+      return this.getMockData('cashFlow');
+    }
+
     try {
-      const { startDate, endDate } = filters;
-      
-      let dateFilter = '';
-      if (startDate && endDate) {
-        dateFilter = `AND creation_date >= '${startDate}' AND creation_date <= '${endDate}'`;
-      }
-      
-      const cashFlow = await sql(`
-        SELECT 
-          DATE_TRUNC('day', creation_date) as date,
-          SUM(CASE WHEN gross_profit >= 0 THEN gross_profit ELSE 0 END) as profit,
-          SUM(CASE WHEN gross_profit < 0 THEN ABS(gross_profit) ELSE 0 END) as loss,
-          SUM(net_revenue) as revenue,
-          SUM(total_fees) as fees,
-          COUNT(*) as orders
-        FROM orders 
-        WHERE user_id = $1 ${dateFilter}
-        GROUP BY DATE_TRUNC('day', creation_date)
-        ORDER BY date ASC
-      `, userId);
-      
-      return cashFlow;
+      const response = await fetch(`${this.baseURL}/cash-flow?userId=${userId}&${new URLSearchParams(filters)}`);
+      if (!response.ok) throw new Error('Failed to fetch cash flow');
+      return await response.json();
     } catch (error) {
       this.handleError(error, 'dados de fluxo de caixa');
     }
@@ -228,18 +159,15 @@ export class ShopeeFlowAPI {
   
   // Obter configurações do usuário
   async getUserSettings(userId) {
+    if (this.isDevelopment) {
+      return this.getMockData('settings');
+    }
+
     try {
-      const userSettings = await sql(`
-        SELECT * FROM user_settings WHERE user_id = $1
-      `, userId);
-      
-      return userSettings[0] || {
-        target_margin: 20.00,
-        default_shipping_cost: 15.00,
-        shopee_fee_rate: 20.00,
-        currency: 'BRL',
-        timezone: 'America/Sao_Paulo'
-      };
+      const response = await fetch(`${this.baseURL}/settings?userId=${userId}`);
+      if (!response.ok) throw new Error('Failed to fetch settings');
+      const data = await response.json();
+      return data[0] || this.getMockData('settings');
     } catch (error) {
       this.handleError(error, 'buscar configurações');
     }
@@ -249,13 +177,19 @@ export class ShopeeFlowAPI {
   
   // Limpar dados do usuário
   async clearUserData(userId) {
-    try {
-      await sql(`DELETE FROM orders WHERE user_id = $1`, userId);
-      await sql(`DELETE FROM products WHERE user_id = $1`, userId);
-      await sql(`DELETE FROM expenses WHERE user_id = $1`, userId);
-      await sql(`DELETE FROM product_costs_history WHERE user_id = $1`, userId);
-      
+    if (this.isDevelopment) {
+      console.log('[Mock Mode] Limpando dados do usuário:', userId);
       return true;
+    }
+
+    try {
+      const response = await fetch(`${this.baseURL}/clear`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId })
+      });
+      if (!response.ok) throw new Error('Failed to clear data');
+      return await response.json();
     } catch (error) {
       this.handleError(error, 'limpar dados');
     }
