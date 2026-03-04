@@ -124,46 +124,70 @@ export default function App() {
     }
   };
 
-  // --- CÁLCULOS AVANÇADOS ---
+  // --- CÁLCULOS AVANÇADOS - LÓGICA INDIVIDUAL POR PEDIDO ---
   const analytics = useMemo(() => {
     const validOrders = orders.filter(o => !o.status?.toLowerCase().includes('cancelado'));
     
-    const totalGross = validOrders.reduce((acc, o) => acc + (Number(o.sale_price) || 0), 0);
-    const totalCogs = validOrders.reduce((acc, o) => acc + (Number(o.product_cost) || 0), 0);
-    
-    // Taxas Reais (O que saiu do seu bolso)
-    const totalFees = validOrders.reduce((acc, o) => 
-      acc + (Number(o.shopee_fee)||0) + (Number(o.fixed_fee)||0) + 
-      (Number(o.seller_voucher)||0) + (Number(o.coins_cashback)||0) + (Number(o.reverse_shipping_fee)||0), 0);
+    // Cálculos individuais por pedido (sem agrupamento)
+    const orderAnalysis = validOrders.map(o => {
+      const fees = (Number(o.shopee_fee)||0) + (Number(o.fixed_fee)||0) + 
+                  (Number(o.seller_voucher)||0) + (Number(o.coins_cashback)||0) + 
+                  (Number(o.reverse_shipping_fee)||0);
+      const orderProfit = (Number(o.sale_price)||0) - (Number(o.product_cost)||0) - fees;
+      const orderMargin = Number(o.sale_price) > 0 ? (orderProfit / Number(o.sale_price)) * 100 : 0;
       
-    const totalProfit = totalGross - totalCogs - totalFees;
+      return {
+        ...o,
+        totalFees: fees,
+        orderProfit: orderProfit,
+        orderMargin: orderMargin,
+        isLoss: orderProfit < 0
+      };
+    });
+    
+    // Totais gerais (baseado em pedidos individuais)
+    const totalGross = orderAnalysis.reduce((acc, o) => acc + (Number(o.sale_price) || 0), 0);
+    const totalCogs = orderAnalysis.reduce((acc, o) => acc + (Number(o.product_cost) || 0), 0);
+    const totalFees = orderAnalysis.reduce((acc, o) => acc + o.totalFees, 0);
+    const totalProfit = orderAnalysis.reduce((acc, o) => acc + o.orderProfit, 0);
     const margin = totalGross > 0 ? (totalProfit / totalGross) * 100 : 0;
 
     // Gráfico Diário (Baseado na Data Real da Planilha)
     const dailyMap = {};
-    orders.forEach(o => {
+    orderAnalysis.forEach(o => {
       const dateRaw = o.creation_date || o.created_at;
       if(!dateRaw) return;
       
       const dateObj = new Date(dateRaw);
       const day = dateObj.toLocaleDateString('pt-BR', { timeZone: 'UTC' }); 
       
-      if (!dailyMap[day]) dailyMap[day] = { name: day.slice(0,5), fullDate: dateRaw, vendas: 0, lucro: 0, faturamento: 0 };
+      if (!dailyMap[day]) {
+        dailyMap[day] = { 
+          name: day.slice(0,5), 
+          fullDate: dateRaw, 
+          vendas: 0, 
+          lucro: 0, 
+          faturamento: 0,
+          totalOrders: 0,
+          lossOrders: 0
+        };
+      }
       
-      if (!o.status.toLowerCase().includes('cancelado')) {
-         dailyMap[day].vendas += 1;
-         dailyMap[day].faturamento += Number(o.sale_price);
-         const fees = (Number(o.shopee_fee)||0) + (Number(o.fixed_fee)||0) + (Number(o.seller_voucher)||0) + (Number(o.coins_cashback)||0);
-         dailyMap[day].lucro += (o.sale_price - o.product_cost - fees);
+      dailyMap[day].totalOrders += 1;
+      dailyMap[day].vendas += 1;
+      dailyMap[day].faturamento += Number(o.sale_price);
+      dailyMap[day].lucro += o.orderProfit;
+      if (o.isLoss) {
+        dailyMap[day].lossOrders += 1;
       }
     });
     
     const dailyChartData = Object.values(dailyMap)
       .sort((a,b) => new Date(a.fullDate) - new Date(b.fullDate));
 
-    // Produtos com análise ABC e ticket médio
+    // Análise por SKU (agrupamento APENAS para visualização)
     const productStats = {};
-    validOrders.forEach(o => {
+    orderAnalysis.forEach(o => {
        const sku = o.sku || 'SEM SKU';
        if(!productStats[sku]) {
          productStats[sku] = { 
@@ -176,26 +200,29 @@ export default function App() {
            unitCost: o.product_cost,
            orders: [],
            lossOrders: [],
-           fees: 0
+           fees: 0,
+           avgTicket: 0,
+           margin: 0,
+           lossRate: 0,
+           avgFees: 0
          };
        }
        const p = productStats[sku];
-       const fees = (Number(o.shopee_fee)||0) + (Number(o.fixed_fee)||0) + (Number(o.seller_voucher)||0);
-       const orderProfit = (o.sale_price - o.product_cost - fees);
        
+       // Acumula valores individuais
        p.qtd += 1;
        p.revenue += Number(o.sale_price);
        p.cost += Number(o.product_cost);
-       p.profit += orderProfit;
-       p.fees += fees;
+       p.profit += o.orderProfit;
+       p.fees += o.totalFees;
        p.orders.push(o);
        
-       if (orderProfit < 0) {
+       if (o.isLoss) {
          p.lossOrders.push(o);
        }
     });
     
-    // Cálculo do ticket médio e margem
+    // Cálculo das médias e taxas por produto
     Object.values(productStats).forEach(p => {
       p.avgTicket = p.qtd > 0 ? p.revenue / p.qtd : 0;
       p.margin = p.revenue > 0 ? (p.profit / p.revenue) * 100 : 0;
@@ -203,7 +230,7 @@ export default function App() {
       p.avgFees = p.qtd > 0 ? p.fees / p.qtd : 0;
     });
     
-    // Análise ABC baseada no faturamento
+    // Análise ABC baseada no faturamento individual
     const sortedByRevenue = Object.values(productStats).sort((a,b) => b.revenue - a.revenue);
     const totalRevenue = sortedByRevenue.reduce((acc, p) => acc + p.revenue, 0);
     
@@ -212,7 +239,7 @@ export default function App() {
       accumulatedRevenue += p.revenue;
       const percentage = (accumulatedRevenue / totalRevenue) * 100;
       
-      let category = 'D'; // Default para produtos de baixo desempenho
+      let category = 'D';
       if (percentage <= 80) category = 'A';
       else if (percentage <= 90) category = 'B';
       else if (percentage <= 95) category = 'C';
@@ -220,16 +247,30 @@ export default function App() {
       return { ...p, category };
     });
 
-    // Insights avançados
+    // Insights avançados baseados em pedidos individuais
     const insights = {
       topProfitable: productListWithABC.filter(p => p.profit > 0).sort((a,b) => b.profit - a.profit).slice(0,5),
       topLoss: productListWithABC.filter(p => p.profit < 0).sort((a,b) => a.profit - b.profit).slice(0,5),
       highLossRate: productListWithABC.filter(p => p.lossRate > 20).sort((a,b) => b.lossRate - a.lossRate),
       lowMargin: productListWithABC.filter(p => p.margin < 10 && p.profit > 0).sort((a,b) => a.margin - b.margin),
-      highFees: productListWithABC.filter(p => p.avgFees > (p.avgTicket * 0.25)).sort((a,b) => b.avgFees - a.avgFees)
+      highFees: productListWithABC.filter(p => p.avgFees > (p.avgTicket * 0.25)).sort((a,b) => b.avgFees - a.avgFees),
+      totalLossOrders: orderAnalysis.filter(o => o.isLoss).length,
+      totalProfitOrders: orderAnalysis.filter(o => !o.isLoss).length,
+      avgOrderValue: orderAnalysis.length > 0 ? totalGross / orderAnalysis.length : 0
     };
 
-    return { totalGross, totalCogs, totalFees, totalProfit, margin, dailyChartData, productList: productListWithABC, insights };
+    return { 
+      totalGross, 
+      totalCogs, 
+      totalFees, 
+      totalProfit, 
+      margin, 
+      dailyChartData, 
+      productList: productListWithABC, 
+      insights,
+      orderAnalysis,
+      totalOrders: orderAnalysis.length
+    };
   }, [orders]);
 
   // --- IMPORTAÇÃO INTELIGENTE ---
@@ -296,9 +337,23 @@ export default function App() {
       };
 
       let sku = row[cols.skuVar] || row[cols.skuMain] || row[cols.prod];
-      sku = sku ? sku.toString().trim() : 'SEM SKU';
-      let cost = productDatabase[sku.replace(/\s/g,'').toUpperCase()] || 0;
+      sku = sku ? sku.toString().trim().toUpperCase().replace(/\s/g, '') : 'SEM SKU';
       
+      // Cálculo de custo individual por pedido
+      let cost = 0;
+      if (productDatabase[sku]) {
+        cost = productDatabase[sku];
+      } else {
+        // Tentar encontrar SKU similar
+        const skuKeys = Object.keys(productDatabase);
+        const foundSku = skuKeys.find(key => 
+          key.includes(sku) || sku.includes(key) || 
+          key.replace(/\s/g, '').toUpperCase() === sku
+        );
+        cost = foundSku ? productDatabase[foundSku] : 0;
+      }
+      
+      // Cálculo de taxas individuais por pedido
       let shopeeFees = 0;
       if(cols.feeCom !== -1) shopeeFees += parseVal(row[cols.feeCom]);
       if(cols.feeServ !== -1) shopeeFees += parseVal(row[cols.feeServ]);
@@ -311,6 +366,17 @@ export default function App() {
       const sale = parseVal(row[cols.price]);
       const status = row[cols.status] || 'Concluído';
       
+      // Validação de lógica: se não houver taxas definidas, usar padrão de 20%
+      if(status.toLowerCase().includes('cancelado')) { 
+        shopeeFees = 0; 
+      } else if(shopeeFees === 0 && sale > 0) { 
+        shopeeFees = sale * 0.20; 
+      }
+      
+      // Cálculo do lucro individual deste pedido
+      const totalFees = Math.abs(shopeeFees) + Math.abs(sellerVoucher) + Math.abs(coins) + Math.abs(reverseFee);
+      const individualProfit = sale - cost - totalFees;
+      
       const creationDate = parseDate(row[cols.created]);
       if(creationDate) {
          const d = new Date(creationDate);
@@ -318,18 +384,24 @@ export default function App() {
          if(d > maxDate) maxDate = d;
       }
 
-      if(status.toLowerCase().includes('cancelado')) { shopeeFees = 0; } 
-      else if(shopeeFees === 0 && sale > 0) { shopeeFees = sale * 0.20; }
-
       return {
-        order_id: row[cols.id], product_name: row[cols.prod], sku, 
-        sale_price: sale, product_cost: cost, 
-        shopee_fee: Math.abs(shopeeFees), fixed_fee: 0,
+        order_id: row[cols.id], 
+        product_name: row[cols.prod], 
+        sku: sku, 
+        sale_price: sale, 
+        product_cost: cost, 
+        shopee_fee: Math.abs(shopeeFees), 
+        fixed_fee: 3.00, // Taxa fixa padrão
         seller_voucher: Math.abs(sellerVoucher),
         shopee_voucher: Math.abs(shopeeVoucher),
         coins_cashback: Math.abs(coins),
         reverse_shipping_fee: Math.abs(reverseFee),
-        status, creation_date: creationDate
+        status: status, 
+        creation_date: creationDate,
+        // Campos adicionais para validação
+        original_sku: row[cols.skuVar] || row[cols.skuMain] || row[cols.prod],
+        calculated_profit: individualProfit,
+        calculated_fees: totalFees
       };
     }).filter(Boolean);
     
@@ -870,7 +942,13 @@ export default function App() {
 
                   {/* Lista de Vendas */}
                   <div className="p-6">
-                    <h4 className="font-bold text-slate-700 mb-4">Histórico de Vendas</h4>
+                    <h4 className="font-bold text-slate-700 mb-4">Histórico de Vendas (Cálculos Individuais)</h4>
+                    <div className="mb-4 p-3 bg-blue-50 rounded-lg">
+                      <div className="text-sm text-blue-800">
+                        <strong>Lógica de Cálculo:</strong> Cada pedido é calculado individualmente. 
+                        Lucro = Valor Venda - Custo Produto - Taxas Totais
+                      </div>
+                    </div>
                     <div className="overflow-x-auto">
                       <table className="w-full text-left text-xs">
                         <thead className="bg-slate-50 uppercase font-black text-slate-400 border-b">
@@ -881,14 +959,19 @@ export default function App() {
                             <th className="p-3 text-right">Custo</th>
                             <th className="p-3 text-right">Taxas</th>
                             <th className="p-3 text-right">Lucro</th>
+                            <th className="p-3 text-right">Margem</th>
                             <th className="p-3 text-center">Status</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
                           {selectedProduct.orders.map((order, idx) => {
+                            // Recalcular para garantir precisão
                             const fees = (Number(order.shopee_fee)||0) + (Number(order.fixed_fee)||0) + 
-                                        (Number(order.seller_voucher)||0) + (Number(order.coins_cashback)||0);
+                                        (Number(order.seller_voucher)||0) + (Number(order.coins_cashback)||0) +
+                                        (Number(order.reverse_shipping_fee)||0);
                             const profit = (Number(order.sale_price)||0) - (Number(order.product_cost)||0) - fees;
+                            const margin = Number(order.sale_price) > 0 ? (profit / Number(order.sale_price)) * 100 : 0;
+                            
                             return (
                               <tr key={idx} className="hover:bg-slate-50">
                                 <td className="p-3 font-bold text-slate-700">{order.order_id}</td>
@@ -899,6 +982,16 @@ export default function App() {
                                 <td className="p-3 text-right font-bold">
                                   <span className={profit >= 0 ? 'text-green-600' : 'text-red-600'}>
                                     R$ {profit.toFixed(2)}
+                                  </span>
+                                </td>
+                                <td className="p-3 text-right">
+                                  <span className={`px-2 py-1 rounded text-xs font-bold ${
+                                    margin > 20 ? 'bg-green-100 text-green-700' :
+                                    margin > 10 ? 'bg-yellow-100 text-yellow-700' :
+                                    margin > 0 ? 'bg-orange-100 text-orange-700' :
+                                    'bg-red-100 text-red-700'
+                                  }`}>
+                                    {margin.toFixed(1)}%
                                   </span>
                                 </td>
                                 <td className="p-3 text-center">
@@ -913,6 +1006,33 @@ export default function App() {
                           })}
                         </tbody>
                       </table>
+                    </div>
+                    
+                    {/* Resumo de Cálculos */}
+                    <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div className="bg-slate-50 p-4 rounded-lg">
+                        <div className="text-sm text-slate-600">Total de Vendas</div>
+                        <div className="text-xl font-bold text-slate-800">
+                          R$ {selectedProduct.orders.reduce((acc, o) => acc + Number(o.sale_price), 0).toFixed(2)}
+                        </div>
+                      </div>
+                      <div className="bg-red-50 p-4 rounded-lg">
+                        <div className="text-sm text-red-600">Total de Custos</div>
+                        <div className="text-xl font-bold text-red-800">
+                          R$ {selectedProduct.orders.reduce((acc, o) => acc + Number(o.product_cost), 0).toFixed(2)}
+                        </div>
+                      </div>
+                      <div className="bg-orange-50 p-4 rounded-lg">
+                        <div className="text-sm text-orange-600">Total de Taxas</div>
+                        <div className="text-xl font-bold text-orange-800">
+                          R$ {selectedProduct.orders.reduce((acc, o) => {
+                            const fees = (Number(o.shopee_fee)||0) + (Number(o.fixed_fee)||0) + 
+                                        (Number(o.seller_voucher)||0) + (Number(o.coins_cashback)||0) +
+                                        (Number(o.reverse_shipping_fee)||0);
+                            return acc + fees;
+                          }, 0).toFixed(2)}
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
