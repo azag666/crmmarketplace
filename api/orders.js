@@ -1,44 +1,46 @@
 import { neon } from '@neondatabase/serverless';
 
 export default async function handler(req, res) {
-  // A Vercel injeta a variável DATABASE_URL automaticamente se você conectou o Neon no painel da Vercel
-  // Se não conectou via integração, adicione a variável DATABASE_URL nas configurações da Vercel
   const sql = neon(process.env.DATABASE_URL);
 
-  // GET: Buscar pedidos
   if (req.method === 'GET') {
     try {
-      const result = await sql`SELECT * FROM closings ORDER BY created_at DESC LIMIT 1000`;
+      // Busca dados ordenados por data de criação
+      const result = await sql`SELECT * FROM closings ORDER BY created_at DESC LIMIT 2000`;
       return res.status(200).json(result);
     } catch (error) {
       return res.status(500).json({ error: error.message });
     }
   }
 
-  // POST: Salvar pedidos
   if (req.method === 'POST') {
     const orders = req.body;
     try {
       for (const order of orders) {
-        // Usa UPSERT: Se o pedido já existe (order_id + user_id), atualiza. Se não, cria.
         await sql`
           INSERT INTO closings (
-            user_id, order_id, product_name, sku, sale_price, product_cost, shopee_fee, fixed_fee, status
+            user_id, order_id, product_name, sku, sale_price, product_cost, shopee_fee, fixed_fee, status,
+            paid_at, shipped_at, shipping_provider, city, state, return_status, cancel_reason, quantity
           ) VALUES (
             ${order.user_id}::uuid, ${order.order_id}, ${order.product_name}, ${order.sku}, 
-            ${order.sale_price}, ${order.product_cost}, ${order.shopee_fee}, ${order.fixed_fee}, ${order.status}
+            ${order.sale_price}, ${order.product_cost}, ${order.shopee_fee}, ${order.fixed_fee}, ${order.status},
+            ${order.paid_at || null}, ${order.shipped_at || null}, ${order.shipping_provider}, 
+            ${order.city}, ${order.state}, ${order.return_status}, ${order.cancel_reason}, ${order.quantity}
           )
           ON CONFLICT (order_id, user_id) 
           DO UPDATE SET 
             status = EXCLUDED.status,
+            paid_at = EXCLUDED.paid_at,
+            shipped_at = EXCLUDED.shipped_at,
+            return_status = EXCLUDED.return_status,
             product_cost = EXCLUDED.product_cost,
             shopee_fee = EXCLUDED.shopee_fee,
-            sale_price = EXCLUDED.sale_price,
-            sku = EXCLUDED.sku;
+            sale_price = EXCLUDED.sale_price;
         `;
       }
       return res.status(200).json({ message: 'Success' });
     } catch (error) {
+      console.error(error);
       return res.status(500).json({ error: error.message });
     }
   }
